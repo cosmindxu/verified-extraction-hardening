@@ -1,0 +1,9 @@
+-Q theories RocqRustExamples
+-arg -w -arg -notation-overridden
+
+theories/InsertionSort.v
+theories/ExtractInsertionSort.v
+theories/ExtractInsertionSortPlugin.v
+theories/Trading.v
+theories/ExtractTrading.v
+theories/ExtractTradingChecked.v

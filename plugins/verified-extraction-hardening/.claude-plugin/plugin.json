@@ -1,0 +1,6 @@
+{
+  "name": "verified-extraction-hardening",
+  "version": "0.1.0",
+  "description": "Harden formally verified code extracted to native libraries and consumed over FFI — proved input domains, checked-arithmetic builds, panic containment, differential tests, machine-readable audit records",
+  "author": {"name": "Cosmin D."}
+}

@@ -1,0 +1,17 @@
+{
+  "name": "verified-extraction-hardening",
+  "owner": {
+    "name": "Cosmin D."
+  },
+  "metadata": {
+    "description": "Harden formally verified code extracted to native libraries and consumed over FFI — proved input domains, checked-arithmetic builds, panic containment, differential tests, machine-readable audit records",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "verified-extraction-hardening",
+      "description": "Closes the three guarantee leaks of prover→native→host pipelines (width remaps, FFI marshalling, host coercion); includes audit checklist JSON schema",
+      "source": "./plugins/verified-extraction-hardening"
+    }
+  ]
+}

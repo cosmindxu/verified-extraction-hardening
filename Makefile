@@ -1,0 +1,118 @@
+ROCQ_MAKEFILE := RocqMakefile
+
+# Driver #1: hand-built remaps, no OCaml plugin needed.
+EXTRACTED_1 := extracted/InsertionSort.rs.out
+CRATE_1     := rust/insertion_sort
+MAIN_1      := $(CRATE_1)/src/main.rs
+BIN_1       := $(CRATE_1)/target/release/insertion_sort
+
+# Driver #2: `Rust Extract` vernacular from rocq-typed-extraction-plugin.
+EXTRACTED_2 := extracted/InsertionSortPlugin.rs.out
+CRATE_2     := rust/insertion_sort_plugin
+MAIN_2      := $(CRATE_2)/src/main.rs
+BIN_2       := $(CRATE_2)/target/release/insertion_sort_plugin
+
+# Example #2: verified trading analytics.
+EXTRACTED_T := extracted/Trading.rs.out
+EXTRACTED_TC := extracted/TradingChecked.rs.out
+CRATE_T     := rust/trading
+MAIN_T      := $(CRATE_T)/src/main.rs
+BIN_T       := $(CRATE_T)/target/release/trading
+
+# Python bindings: one cdylib holding both extracted modules.
+CRATE_F  := rust/rocq_ffi
+FFI_LIB  := $(CRATE_F)/target/release/librocq_ffi.so
+
+.PHONY: all rocq rust run compare trading python clean
+
+all: run
+
+$(ROCQ_MAKEFILE): _CoqProject
+	rocq makefile -f _CoqProject -o $(ROCQ_MAKEFILE)
+
+# Compiles the proofs and, via the Redirects in the two extraction drivers,
+# writes both .rs.out files.
+rocq: $(ROCQ_MAKEFILE)
+	$(MAKE) -f $(ROCQ_MAKEFILE)
+
+# Generated code + hand-written driver -> a single main.rs.
+# The plugin prints `Debug: ... executed in: ...s` timing lines; strip them.
+$(MAIN_1): rocq rust/main_suffix.rs
+	@mkdir -p $(CRATE_1)/src
+	sed '/^Debug/d' $(EXTRACTED_1) > $@
+	cat rust/main_suffix.rs >> $@
+
+$(MAIN_2): rocq rust/main_suffix.rs
+	@mkdir -p $(CRATE_2)/src
+	sed '/^Debug/d' $(EXTRACTED_2) > $@
+	cat rust/main_suffix.rs >> $@
+
+$(MAIN_T): rocq rust/trading_main.rs
+	@mkdir -p $(CRATE_T)/src
+	sed '/^Debug/d' $(EXTRACTED_T) > $@
+	cat rust/trading_main.rs >> $@
+
+rust: $(MAIN_1) $(MAIN_2) $(MAIN_T)
+	cd $(CRATE_1) && cargo build --release
+	cd $(CRATE_2) && cargo build --release
+	cd $(CRATE_T) && cargo build --release
+
+run: rust
+	@echo; echo "########## insertion sort, driver #1: hand-built remaps ##########"; echo
+	./$(BIN_1)
+	@echo; echo "########## insertion sort, driver #2: Rust Extract ##########"; echo
+	./$(BIN_2)
+	@echo; echo "########## trading analytics ##########"; echo
+	./$(BIN_T)
+
+# --- Python bindings -------------------------------------------------
+# Each extracted module keeps its own Program/arena/datatypes, so they go
+# into separate Rust modules; the generated code names types identically.
+$(CRATE_F)/src/sorting.rs: rocq rust/ffi_sorting_api.rs
+	@mkdir -p $(CRATE_F)/src
+	sed '/^Debug/d' $(EXTRACTED_1) > $@
+	cat rust/ffi_sorting_api.rs >> $@
+
+$(CRATE_F)/src/trading.rs: rocq rust/ffi_trading_api.rs
+	@mkdir -p $(CRATE_F)/src
+	sed '/^Debug/d' $(EXTRACTED_T) > $@
+	cat rust/ffi_trading_api.rs >> $@
+
+$(CRATE_F)/src/trading_checked.rs: rocq rust/ffi_trading_api.rs
+	@mkdir -p $(CRATE_F)/src
+	sed '/^Debug/d' $(EXTRACTED_TC) > $@
+	cat rust/ffi_trading_api.rs >> $@
+
+$(FFI_LIB): $(CRATE_F)/src/sorting.rs $(CRATE_F)/src/trading.rs $(CRATE_F)/src/trading_checked.rs $(CRATE_F)/src/lib.rs
+	cd $(CRATE_F) && cargo build --release
+
+python: $(FFI_LIB)
+	@echo
+	cd python && python3 demo.py
+
+# Just the trading example.
+trading: $(MAIN_T)
+	cd $(CRATE_T) && cargo build --release
+	@echo
+	./$(BIN_T)
+
+# Do the two pipelines agree, on the generated source and at runtime?
+compare: rust
+	@echo "--- generated source (Debug timing lines stripped) ---"
+	@diff $(MAIN_1) $(MAIN_2) > /dev/null && echo "IDENTICAL" \
+	  || diff $(MAIN_1) $(MAIN_2) | sed -n '1,40p'
+	@echo
+	@echo "--- program output ---"
+	@./$(BIN_1) > /tmp/out1.txt; ./$(BIN_2) > /tmp/out2.txt; \
+	 diff /tmp/out1.txt /tmp/out2.txt > /dev/null \
+	   && echo "IDENTICAL" || diff /tmp/out1.txt /tmp/out2.txt
+
+clean:
+	-$(MAKE) -f $(ROCQ_MAKEFILE) clean 2>/dev/null || true
+	rm -f $(ROCQ_MAKEFILE) $(ROCQ_MAKEFILE).conf
+	rm -f theories/*.vo theories/*.vok theories/*.vos theories/*.glob theories/.*.aux
+	rm -f $(EXTRACTED_1) $(EXTRACTED_2) $(EXTRACTED_T) $(EXTRACTED_TC)
+	rm -f $(MAIN_1) $(MAIN_2) $(MAIN_T)
+	rm -f $(CRATE_F)/src/sorting.rs $(CRATE_F)/src/trading.rs $(CRATE_F)/src/trading_checked.rs
+	rm -rf $(CRATE_1)/target $(CRATE_2)/target $(CRATE_T)/target $(CRATE_F)/target
+	rm -rf python/__pycache__

@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cosmindxu/verified-extraction-hardening/checklist.schema.json",
+  "title": "verified-extraction-hardening audit result",
+  "description": "Machine-readable evidence record produced when the verified-extraction-hardening skill is applied to a project. One file per audit run, checked into the audited repo (conventionally at audits/hardening-<date>.json).",
+  "type": "object",
+  "required": ["schema_version", "project", "date", "toolchain", "items", "residual_trusted_base"],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "project": { "type": "string", "description": "Repo or project name audited" },
+    "date": { "type": "string", "format": "date" },
+    "auditor": { "type": "string", "description": "Human or agent that ran the audit" },
+    "toolchain": {
+      "type": "object",
+      "description": "Versions pin the claim: an audit is evidence only for these versions.",
+      "required": ["prover", "extractor", "native", "host"],
+      "properties": {
+        "prover": { "type": "string", "description": "e.g. 'Rocq 9.1.1'" },
+        "extractor": { "type": "string", "description": "e.g. 'rocq-typed-extraction-plugin 0.2.1'" },
+        "native": { "type": "string", "description": "e.g. 'rustc 1.97.1'" },
+        "host": { "type": "string", "description": "e.g. 'Python 3.14.4 (ctypes)'" }
+      }
+    },
+    "items": {
+      "type": "array",
+      "description": "One entry per checklist item. Every item MUST appear, including inapplicable ones — 'n/a' is a finding, not an omission.",
+      "items": {
+        "type": "object",
+        "required": ["id", "status", "evidence"],
+        "properties": {
+          "id": {
+            "enum": [
+              "checked-arith-default",
+              "bounds-cover-intermediates",
+              "safe-domain-proved-and-enforced",
+              "eval-before-check-obligations",
+              "theorem-hypotheses-enforced",
+              "boundary-value-test",
+              "differential-test",
+              "panic-containment",
+              "coercion-rejection",
+              "residual-tcb-documented"
+            ]
+          },
+          "status": { "enum": ["pass", "fail", "partial", "n/a"] },
+          "evidence": {
+            "type": "string",
+            "description": "Replayable pointer: theorem name + file, test command + observed output, or code location. 'It looks fine' is not evidence."
+          },
+          "theorems": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Prover theorem names backing this item (must be Print Assumptions-closed)"
+          },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "residual_trusted_base": {
+      "type": "array",
+      "description": "Every unverified component the guarantee still rests on, named individually.",
+      "items": {
+        "type": "object",
+        "required": ["component", "why_trusted"],
+        "properties": {
+          "component": { "type": "string" },
+          "why_trusted": { "type": "string" },
+          "mitigation": { "type": "string" }
+        }
+      }
+    },
+    "known_leaks": {
+      "type": "array",
+      "description": "Demonstrated divergences between the proved program and the shipped binary, with the triggering input. Empty means none FOUND, not none PRESENT.",
+      "items": {
+        "type": "object",
+        "required": ["input", "expected", "observed", "closed_by"],
+        "properties": {
+          "input": { "type": "string" },
+          "expected": { "type": "string" },
+          "observed": { "type": "string" },
+          "closed_by": { "type": "string", "description": "Which layer now stops it, or 'OPEN'" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,97 @@
+{
+  "schema_version": "1",
+  "project": "rocq-rust-examples",
+  "date": "2026-07-27",
+  "auditor": "Claude Code (Opus 5) + human review",
+  "toolchain": {
+    "prover": "Rocq 9.1.1 (MetaRocq 1.5.1+9.1)",
+    "extractor": "rocq-typed-extraction-plugin 0.2.1",
+    "native": "rustc 1.97.1",
+    "host": "Python 3.14.4 (ctypes)"
+  },
+  "items": [
+    {
+      "id": "checked-arith-default",
+      "status": "pass",
+      "evidence": "theories/ExtractTradingChecked.v imports ExtrRustCheckedArith; rust/rocq_ffi/src/trading_checked.rs contains checked_add/checked_sub/checked_mul/checked_neg; python/rocq.py defaults checked=True on max_profit/max_drawdown/run_orders."
+    },
+    {
+      "id": "bounds-cover-intermediates",
+      "status": "pass",
+      "evidence": "mp_bounded and mdd_bounded in theories/Trading.v bound the accumulators (m, b / peak, worst) by induction over the scans' own recursion, not just the results.",
+      "theorems": ["mp_bounded", "mdd_bounded"]
+    },
+    {
+      "id": "safe-domain-proved-and-enforced",
+      "status": "pass",
+      "evidence": "safe_price_bound = 2^62-1 defined in theories/Trading.v; max_profit_fits_i64 / max_drawdown_fits_i64 closed under the global context (Print Assumptions); python/rocq.py SAFE_PRICE_BOUND mirrors it and _enforce_price_domain rejects with DomainError citing the theorem.",
+      "theorems": ["max_profit_fits_i64", "max_drawdown_fits_i64"]
+    },
+    {
+      "id": "eval-before-check-obligations",
+      "status": "pass",
+      "evidence": "step computes `pos + qty` before range-checking; step_fits_i64 states the extra obligation limit + max|qty| <= i64_max; enforced in python/rocq.py run_orders.",
+      "theorems": ["step_want_bounded", "step_fits_i64"]
+    },
+    {
+      "id": "theorem-hypotheses-enforced",
+      "status": "pass",
+      "evidence": "run_orders_within_limit assumes -lim <= pos0 <= lim; python/rocq.py rejects limit < 0 (empty interval) and initial outside [-limit, limit] with ValueError before calling native code."
+    },
+    {
+      "id": "boundary-value-test",
+      "status": "pass",
+      "evidence": "python/demo.py section 5: max_profit([-SAFE_PRICE_BOUND, SAFE_PRICE_BOUND]) = 9223372036854775806 matches the Python spec transliteration exactly at the proved boundary."
+    },
+    {
+      "id": "differential-test",
+      "status": "pass",
+      "evidence": "python/demo.py: 2000 random series vs naive O(n^2) spec for max_profit and max_drawdown, 2000 random order sequences vs naive gate, plus 2000 random sort lists vs sorted(); rust/trading_main.rs repeats this natively with 5000 trials. All pass as of this audit's toolchain."
+    },
+    {
+      "id": "panic-containment",
+      "status": "pass",
+      "evidence": "rust/rocq_ffi/src/lib.rs wraps every call into extracted code in catch_unwind; status codes ROCQ_OK/ROCQ_ERR_NULL/ROCQ_ERR_PANIC; quiet panic hook with ROCQ_FFI_VERBOSE opt-out; demo layer-1 test observes RocqError instead of a crash."
+    },
+    {
+      "id": "coercion-rejection",
+      "status": "pass",
+      "evidence": "python/rocq.py rejects float (TypeError, bool excluded via isinstance check), out-of-int64 (OverflowError); demo.py section 4 exercises all three rejections."
+    },
+    {
+      "id": "residual-tcb-documented",
+      "status": "pass",
+      "evidence": "README section 'What is still trusted' names: extraction pretty-printer, remap table, FFI marshalling + ctypes packing, rustc/cargo."
+    }
+  ],
+  "residual_trusted_base": [
+    {
+      "component": "MetaRocq erasure pretty-printer (lambda-box -> Rust text)",
+      "why_trusted": "The erasure pipeline is verified; the final printing step is not.",
+      "mitigation": "Differential tests (layer 3); small, readable generated output."
+    },
+    {
+      "component": "Remap table (Z -> i64, bool -> bool, Z.add -> checked_add, ...)",
+      "why_trusted": "Axiom connecting Rocq terms to Rust primitives; unprovable by construction.",
+      "mitigation": "Checked variants make width violations panic; proved domain keeps execution inside the region where the remap is faithful."
+    },
+    {
+      "component": "FFI layer (lib.rs) and ctypes packing (rocq.py)",
+      "why_trusted": "Ordinary hand-written code; no theorem covers it.",
+      "mitigation": "Differential tests cross the full stack; boundary defends itself (null checks, length clamp, catch_unwind)."
+    },
+    {
+      "component": "rustc / cargo / bumpalo",
+      "why_trusted": "Compiler and allocator correctness assumed.",
+      "mitigation": "None beyond upstream testing; same trust as any Rust project."
+    }
+  ],
+  "known_leaks": [
+    {
+      "input": "max_profit([-2^62, 2^62]) — both values are legal i64",
+      "expected": "9223372036854775808 (= 2^63, per max_profit_correct over Z)",
+      "observed": "0 from the unchecked build (i64 wraparound), silently",
+      "closed_by": "Layer 2 (DomainError via SAFE_PRICE_BOUND, default) and layer 1 (checked build panics -> RocqError if domain check is bypassed)"
+    }
+  ]
+}
