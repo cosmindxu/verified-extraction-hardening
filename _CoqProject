@@ -7,3 +7,9 @@ theories/ExtractInsertionSortPlugin.v
 theories/Trading.v
 theories/ExtractTrading.v
 theories/ExtractTradingChecked.v
+theories/Rle.v
+theories/ExtractRle.v
+theories/ModExp.v
+theories/ExtractModExp.v
+theories/OrderFsm.v
+theories/ExtractOrderFsm.v

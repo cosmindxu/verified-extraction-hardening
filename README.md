@@ -165,6 +165,48 @@ could satisfy it.
 
 ---
 
+# Example 3–5: three overflow postures
+
+Three further examples, chosen so that each handles the width-remap leak a
+*different* way. Together they are the skill's taxonomy, executable:
+
+| Example | Theory | Headline theorems | Overflow posture |
+| --- | --- | --- | --- |
+| RLE codec | [`theories/Rle.v`](theories/Rle.v) | `rle_roundtrip`, `encode_length_le`, `encode_counts_pos`, `decode_length` | **No arithmetic to leak** — values are copied, counts are bounded by input length |
+| Modular exponentiation | [`theories/ModExp.v`](theories/ModExp.v) | `pow_mod_correct`, `pow_mod_lt`, `square_fits`, `mixed_fits` | **Proved domain** — `modulus <= 2^32` (`safe_modulus`) keeps every product in u64; enforced by the bindings |
+| Order FSM | [`theories/OrderFsm.v`](theories/OrderFsm.v) | `run_invariant`, `canceled_frozen`, `fill_add_bounded` | **Designed out** — the guard compares *before* adding, so it is safe for ALL inputs and the bindings enforce nothing |
+
+Notes worth stealing:
+
+- `encode_length_le` is a theorem doing FFI work: it justifies allocating the
+  encode output buffer at the input's size.
+- `pow_mod` is square-and-multiply by structural recursion on `positive`,
+  which extracts to Rust's shift-based `__pos_elim` — the extracted code
+  really is O(log e). `python/demo_more.py` checks 2000 random `(m, b, e)`
+  against Python's built-in `pow`.
+- The FSM guard (`0 <=? n && n <=? qty - filled`) evaluates no arithmetic
+  that can leave the invariant's range — contrast the trading gate, which
+  computes `pos + qty` first and therefore needs a proved side condition
+  (`step_fits_i64`). Designing the check to come first is cheaper than
+  proving the extra obligation.
+- The order FSM demo throws fills drawn from the whole i64 range at the
+  checked build: it never panics, because there is nothing to catch.
+
+## Remap namespace skew (Rocq 9.1 gotcha)
+
+The plugin's `N.*` remaps target `Stdlib.NArith.BinNatDef`, but some stdlib
+`N` operators (`N.leb`, `N.compare` via `<=?`) resolve to kernel names under
+`Corelib.BinNums.NatDef` — those remaps miss, the operators extract from
+source, and the source of `N.compare` trips an arity error on the remapped
+`Pos.compare` (which is a partial application in Rocq, so its remapped call
+sites print with arity 0). Symptom: `this method takes 2 arguments but 0
+arguments were supplied` on generated code. Workaround used by
+`OrderFsm.v`: model quantities in `Z`, whose remap surface
+(`Corelib.BinNums.IntDef.Z.*`) matches. `ModExp.v` is unaffected because
+`N.mul`/`N.modulo` do resolve to the `Stdlib.NArith` names.
+
+---
+
 # Calling it from Python
 
 `make python`. No pip install, no build tooling beyond cargo — the bindings

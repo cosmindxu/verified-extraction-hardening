@@ -15,6 +15,9 @@ BIN_2       := $(CRATE_2)/target/release/insertion_sort_plugin
 # Example #2: verified trading analytics.
 EXTRACTED_T := extracted/Trading.rs.out
 EXTRACTED_TC := extracted/TradingChecked.rs.out
+EXTRACTED_RLE := extracted/Rle.rs.out
+EXTRACTED_MX := extracted/ModExp.rs.out
+EXTRACTED_FSM := extracted/OrderFsm.rs.out
 CRATE_T     := rust/trading
 MAIN_T      := $(CRATE_T)/src/main.rs
 BIN_T       := $(CRATE_T)/target/release/trading
@@ -83,12 +86,33 @@ $(CRATE_F)/src/trading_checked.rs: rocq rust/ffi_trading_api.rs
 	sed '/^Debug/d' $(EXTRACTED_TC) > $@
 	cat rust/ffi_trading_api.rs >> $@
 
-$(FFI_LIB): $(CRATE_F)/src/sorting.rs $(CRATE_F)/src/trading.rs $(CRATE_F)/src/trading_checked.rs $(CRATE_F)/src/lib.rs
+$(CRATE_F)/src/rle.rs: rocq rust/ffi_rle_api.rs
+	@mkdir -p $(CRATE_F)/src
+	sed '/^Debug/d' $(EXTRACTED_RLE) > $@
+	cat rust/ffi_rle_api.rs >> $@
+
+$(CRATE_F)/src/modexp.rs: rocq rust/ffi_modexp_api.rs
+	@mkdir -p $(CRATE_F)/src
+	sed '/^Debug/d' $(EXTRACTED_MX) > $@
+	cat rust/ffi_modexp_api.rs >> $@
+
+$(CRATE_F)/src/order_fsm.rs: rocq rust/ffi_fsm_api.rs
+	@mkdir -p $(CRATE_F)/src
+	sed '/^Debug/d' $(EXTRACTED_FSM) > $@
+	cat rust/ffi_fsm_api.rs >> $@
+
+FFI_GENERATED := $(CRATE_F)/src/sorting.rs $(CRATE_F)/src/trading.rs \
+	$(CRATE_F)/src/trading_checked.rs $(CRATE_F)/src/rle.rs \
+	$(CRATE_F)/src/modexp.rs $(CRATE_F)/src/order_fsm.rs
+
+$(FFI_LIB): $(FFI_GENERATED) $(CRATE_F)/src/lib.rs
 	cd $(CRATE_F) && cargo build --release
 
 python: $(FFI_LIB)
 	@echo
 	cd python && python3 demo.py
+	@echo
+	cd python && python3 demo_more.py
 
 # Just the trading example.
 trading: $(MAIN_T)
@@ -111,8 +135,8 @@ clean:
 	-$(MAKE) -f $(ROCQ_MAKEFILE) clean 2>/dev/null || true
 	rm -f $(ROCQ_MAKEFILE) $(ROCQ_MAKEFILE).conf
 	rm -f theories/*.vo theories/*.vok theories/*.vos theories/*.glob theories/.*.aux
-	rm -f $(EXTRACTED_1) $(EXTRACTED_2) $(EXTRACTED_T) $(EXTRACTED_TC)
+	rm -f $(EXTRACTED_1) $(EXTRACTED_2) $(EXTRACTED_T) $(EXTRACTED_TC) $(EXTRACTED_RLE) $(EXTRACTED_MX) $(EXTRACTED_FSM)
 	rm -f $(MAIN_1) $(MAIN_2) $(MAIN_T)
-	rm -f $(CRATE_F)/src/sorting.rs $(CRATE_F)/src/trading.rs $(CRATE_F)/src/trading_checked.rs
+	rm -f $(FFI_GENERATED)
 	rm -rf $(CRATE_1)/target $(CRATE_2)/target $(CRATE_T)/target $(CRATE_F)/target
 	rm -rf python/__pycache__

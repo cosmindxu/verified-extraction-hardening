@@ -13,40 +13,53 @@
     {
       "id": "checked-arith-default",
       "status": "pass",
-      "evidence": "theories/ExtractTradingChecked.v imports ExtrRustCheckedArith; rust/rocq_ffi/src/trading_checked.rs contains checked_add/checked_sub/checked_mul/checked_neg; python/rocq.py defaults checked=True on max_profit/max_drawdown/run_orders."
+      "evidence": "theories/ExtractTradingChecked.v imports ExtrRustCheckedArith; rust/rocq_ffi/src/trading_checked.rs contains checked_add/checked_sub/checked_mul/checked_neg; python/rocq.py defaults checked=True on max_profit/max_drawdown/run_orders. New examples (Rle, ModExp, OrderFsm) are extracted checked-only (theories/Extract{Rle,ModExp,OrderFsm}.v)."
     },
     {
       "id": "bounds-cover-intermediates",
       "status": "pass",
       "evidence": "mp_bounded and mdd_bounded in theories/Trading.v bound the accumulators (m, b / peak, worst) by induction over the scans' own recursion, not just the results.",
-      "theorems": ["mp_bounded", "mdd_bounded"]
+      "theorems": [
+        "mp_bounded",
+        "mdd_bounded"
+      ]
     },
     {
       "id": "safe-domain-proved-and-enforced",
       "status": "pass",
-      "evidence": "safe_price_bound = 2^62-1 defined in theories/Trading.v; max_profit_fits_i64 / max_drawdown_fits_i64 closed under the global context (Print Assumptions); python/rocq.py SAFE_PRICE_BOUND mirrors it and _enforce_price_domain rejects with DomainError citing the theorem.",
-      "theorems": ["max_profit_fits_i64", "max_drawdown_fits_i64"]
+      "evidence": "safe_price_bound = 2^62-1 defined in theories/Trading.v; max_profit_fits_i64 / max_drawdown_fits_i64 closed under the global context (Print Assumptions); python/rocq.py SAFE_PRICE_BOUND mirrors it and _enforce_price_domain rejects with DomainError citing the theorem. ModExp: safe_modulus = 2^32 proved sufficient (square_fits, mixed_fits, pow_mod_lt in theories/ModExp.v), mirrored as rocq.SAFE_MODULUS and enforced with DomainError; m = 0 rejected (pow_mod_correct hypothesis).",
+      "theorems": [
+        "max_profit_fits_i64",
+        "max_drawdown_fits_i64",
+        "pow_mod_lt",
+        "square_fits",
+        "mixed_fits"
+      ]
     },
     {
       "id": "eval-before-check-obligations",
       "status": "pass",
-      "evidence": "step computes `pos + qty` before range-checking; step_fits_i64 states the extra obligation limit + max|qty| <= i64_max; enforced in python/rocq.py run_orders.",
-      "theorems": ["step_want_bounded", "step_fits_i64"]
+      "evidence": "step computes `pos + qty` before range-checking; step_fits_i64 states the extra obligation limit + max|qty| <= i64_max; enforced in python/rocq.py run_orders. Contrast case: OrderFsm's guard compares before adding (fill_add_bounded), eliminating the obligation entirely — safe for all inputs.",
+      "theorems": [
+        "step_want_bounded",
+        "step_fits_i64",
+        "fill_add_bounded"
+      ]
     },
     {
       "id": "theorem-hypotheses-enforced",
       "status": "pass",
-      "evidence": "run_orders_within_limit assumes -lim <= pos0 <= lim; python/rocq.py rejects limit < 0 (empty interval) and initial outside [-limit, limit] with ValueError before calling native code."
+      "evidence": "run_orders_within_limit assumes -lim <= pos0 <= lim; python/rocq.py rejects limit < 0 (empty interval) and initial outside [-limit, limit] with ValueError before calling native code. pow_mod: m != 0 and m <= safe_modulus enforced; run_order_events: qty >= 0 (init_run_invariant)."
     },
     {
       "id": "boundary-value-test",
       "status": "pass",
-      "evidence": "python/demo.py section 5: max_profit([-SAFE_PRICE_BOUND, SAFE_PRICE_BOUND]) = 9223372036854775806 matches the Python spec transliteration exactly at the proved boundary."
+      "evidence": "python/demo.py section 5: max_profit([-SAFE_PRICE_BOUND, SAFE_PRICE_BOUND]) = 9223372036854775806 matches the Python spec transliteration exactly at the proved boundary. pow_mod tested at exactly m = 2^32 (demo_more.py)."
     },
     {
       "id": "differential-test",
       "status": "pass",
-      "evidence": "python/demo.py: 2000 random series vs naive O(n^2) spec for max_profit and max_drawdown, 2000 random order sequences vs naive gate, plus 2000 random sort lists vs sorted(); rust/trading_main.rs repeats this natively with 5000 trials. All pass as of this audit's toolchain."
+      "evidence": "python/demo.py: 2000 random series vs naive O(n^2) spec for max_profit and max_drawdown, 2000 random order sequences vs naive gate, plus 2000 random sort lists vs sorted(); rust/trading_main.rs repeats this natively with 5000 trials. All pass as of this audit's toolchain. demo_more.py: 2000 RLE roundtrips (+ length-bound and counts-positive witnesses), 2000 pow_mod trials vs Python's pow(), 2000 adversarial FSM event streams (fills across full i64) vs reference."
     },
     {
       "id": "panic-containment",
@@ -92,6 +105,12 @@
       "expected": "9223372036854775808 (= 2^63, per max_profit_correct over Z)",
       "observed": "0 from the unchecked build (i64 wraparound), silently",
       "closed_by": "Layer 2 (DomainError via SAFE_PRICE_BOUND, default) and layer 1 (checked build panics -> RocqError if domain check is bypassed)"
+    },
+    {
+      "input": "OrderFsm originally on N: `<=?` resolves to Corelib.BinNums.NatDef.N.leb, missed by the plugin's Stdlib.NArith remaps",
+      "expected": "compiling extracted code",
+      "observed": "generated Rust fails to compile: remapped Pos.compare (a partial application in Rocq) printed with arity 0 — `this method takes 2 arguments but 0 arguments were supplied`",
+      "closed_by": "Modeling quantities in Z (Corelib.BinNums.IntDef remap surface). Loud (build failure), not silent; recorded as a toolchain gotcha in README."
     }
   ]
 }

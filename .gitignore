@@ -21,6 +21,9 @@ rust/trading/src/main.rs
 rust/rocq_ffi/src/sorting.rs
 rust/rocq_ffi/src/trading.rs
 rust/rocq_ffi/src/trading_checked.rs
+rust/rocq_ffi/src/rle.rs
+rust/rocq_ffi/src/modexp.rs
+rust/rocq_ffi/src/order_fsm.rs
 
 # Cargo
 rust/*/target/

@@ -18,6 +18,9 @@ What is actually proved (all ``Closed under the global context``):
 ``max_profit``        equals the naive max-over-all-pairs specification
 ``max_drawdown``      equals the naive max-over-all-pairs specification
 ``run_orders``        position never leaves ``[-limit, limit]``
+``rle_encode/decode`` round trip; output length bounds
+``pow_mod``           equals ``(b ** e) % m`` for ``0 < m <= 2**32``
+``run_order_events``  ``0 <= filled <= qty`` for every event stream
 ===================== ==================================================
 
 Prices and quantities are integers (ticks or cents). That is not an
@@ -40,11 +43,16 @@ __all__ = [
     "SAFE_PRICE_BOUND",
     "I64_MIN",
     "I64_MAX",
+    "SAFE_MODULUS",
     "sort",
     "max_profit",
     "max_drawdown",
     "run_orders",
     "analyze",
+    "rle_encode",
+    "rle_decode",
+    "pow_mod",
+    "run_order_events",
     "library_path",
 ]
 
@@ -85,6 +93,7 @@ class DomainError(ValueError):
 _STATUS = {
     -1: "null pointer passed with a non-zero length",
     -2: "the extracted code panicked (contained at the FFI boundary)",
+    -3: "output exceeded the provided buffer capacity",
 }
 
 
@@ -125,6 +134,27 @@ def _load() -> ctypes.CDLL:
             ctypes.c_int64, ctypes.c_int64, u8p, i64p, ctypes.c_size_t, i64p
         ]
         fn.restype = ctypes.c_int32
+
+    u64p = ctypes.POINTER(ctypes.c_uint64)
+    szp = ctypes.POINTER(ctypes.c_size_t)
+
+    lib.rocq_rle_encode.argtypes = [i64p, ctypes.c_size_t, i64p, u64p, szp]
+    lib.rocq_rle_encode.restype = ctypes.c_int32
+    lib.rocq_rle_decode.argtypes = [
+        i64p, u64p, ctypes.c_size_t, i64p, ctypes.c_size_t, szp
+    ]
+    lib.rocq_rle_decode.restype = ctypes.c_int32
+
+    lib.rocq_pow_mod.argtypes = [
+        ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64, u64p
+    ]
+    lib.rocq_pow_mod.restype = ctypes.c_int32
+
+    lib.rocq_order_fsm_run.argtypes = [
+        ctypes.c_int64, u8p, i64p, ctypes.c_size_t, i64p,
+        ctypes.POINTER(ctypes.c_uint8),
+    ]
+    lib.rocq_order_fsm_run.restype = ctypes.c_int32
 
     lib.rocq_analyze.argtypes = [
         i64p, ctypes.c_size_t, ctypes.c_int64, u8p, i64p, ctypes.c_size_t, i64p
@@ -321,3 +351,130 @@ def analyze(
     out = (ctypes.c_int64 * 3)()
     _check(_get().rocq_analyze(arr, pn, limit, sides, qtys, on, out))
     return Analytics(out[0], out[1], out[2])
+
+
+U64_MAX = 2**64 - 1
+
+#: Largest modulus for which every intermediate product of ``pow_mod`` fits
+#: in u64: ``safe_modulus`` in theories/ModExp.v (``square_fits`` /
+#: ``mixed_fits``, given ``pow_mod_lt``).
+SAFE_MODULUS = 2**32
+
+
+def _as_u64(value: int, what: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{what} must be an int, got {type(value).__name__}: {value!r}")
+    if not 0 <= value <= U64_MAX:
+        raise OverflowError(f"{what} does not fit in uint64: {value}")
+    return value
+
+
+def rle_encode(values: Iterable[int]) -> list[tuple[int, int]]:
+    """Run-length encode into ``[(value, count), ...]``.
+
+    The output buffer is sized to the input length -- sufficient by
+    ``encode_length_le`` in theories/Rle.v. Every count is >= 1
+    (``encode_counts_pos``). No overflow domain to enforce: the codec
+    performs no arithmetic beyond count increments bounded by the input
+    length.
+    """
+    arr, n = _as_i64_array(values, "values")
+    out_vals = (ctypes.c_int64 * n)()
+    out_counts = (ctypes.c_uint64 * n)()
+    out_n = ctypes.c_size_t()
+    _check(_get().rocq_rle_encode(arr, n, out_vals, out_counts, ctypes.byref(out_n)))
+    k = out_n.value
+    return list(zip(out_vals[:k], out_counts[:k]))
+
+
+def rle_decode(runs: Sequence[tuple[int, int]]) -> list[int]:
+    """Expand ``[(value, count), ...]`` runs. Inverse of :func:`rle_encode`
+    on its image (``rle_roundtrip``); the output length equals the sum of
+    counts (``decode_length``), which is how the buffer is sized here.
+    """
+    vals, counts = [], []
+    for i, (v, c) in enumerate(runs):
+        vals.append(_as_i64(v, f"runs[{i}].value"))
+        counts.append(_as_u64(c, f"runs[{i}].count"))
+    total = sum(counts)
+    if total > 2**48:
+        raise DomainError(
+            f"decoded length {total} is unreasonably large; refusing to allocate"
+        )
+    n = len(vals)
+    va = (ctypes.c_int64 * n)(*vals)
+    ca = (ctypes.c_uint64 * n)(*counts)
+    out = (ctypes.c_int64 * total)()
+    out_len = ctypes.c_size_t()
+    _check(_get().rocq_rle_decode(va, ca, n, out, total, ctypes.byref(out_len)))
+    return list(out[: out_len.value])
+
+
+def pow_mod(modulus: int, base: int, exponent: int) -> int:
+    """``(base ** exponent) % modulus`` by verified square-and-multiply.
+
+    ``pow_mod_correct`` (theories/ModExp.v) proves equality with the spec
+    for ``modulus != 0``; ``modulus <= SAFE_MODULUS`` (2**32) is the proved
+    condition (``square_fits``/``mixed_fits``) under which no intermediate
+    product can leave u64. Both are enforced here; ``base`` and ``exponent``
+    may be any u64.
+    """
+    m = _as_u64(modulus, "modulus")
+    b = _as_u64(base, "base")
+    e = _as_u64(exponent, "exponent")
+    if m == 0:
+        raise DomainError(
+            "modulus 0 is outside the correctness theorem (pow_mod_correct "
+            "assumes m <> 0); Rocq's x mod 0 = x convention is not a modulus"
+        )
+    if m > SAFE_MODULUS:
+        raise DomainError(
+            f"modulus {m} exceeds SAFE_MODULUS ({SAFE_MODULUS}). It is a valid "
+            f"uint64, but intermediate products of values < m would overflow "
+            f"u64. See square_fits/mixed_fits in theories/ModExp.v."
+        )
+    out = ctypes.c_uint64()
+    _check(_get().rocq_pow_mod(m, b, e, ctypes.byref(out)))
+    return out.value
+
+
+class OrderState(NamedTuple):
+    filled: int
+    canceled: bool
+
+
+def run_order_events(
+    qty: int, events: Sequence[tuple[str, int] | str]
+) -> OrderState:
+    """Run fill/cancel events against a fresh order of size ``qty``.
+
+    Events: ``("fill", n)`` or ``"cancel"``. Guaranteed by ``run_invariant``
+    (theories/OrderFsm.v): ``0 <= filled <= qty`` for EVERY event stream --
+    negative and overfilling fills are rejected by the machine itself, and
+    ``canceled_frozen`` freezes the state after a cancel. No domain to
+    enforce beyond ``qty >= 0``: the guard compares before adding
+    (``fill_add_bounded``), so overflow is designed out.
+    """
+    q = _as_i64(qty, "qty")
+    if q < 0:
+        raise ValueError(f"qty must be >= 0, got {q} (init_run_invariant needs 0 <= qty)")
+    fills, qtys = [], []
+    for i, ev in enumerate(events):
+        if ev == "cancel" or ev == ("cancel",):
+            fills.append(0)
+            qtys.append(0)
+        else:
+            tag, n = ev
+            if tag != "fill":
+                raise ValueError(f"events[{i}]: unknown event {ev!r}")
+            fills.append(1)
+            qtys.append(_as_i64(n, f"events[{i}].qty"))
+    k = len(fills)
+    fa = (ctypes.c_uint8 * k)(*fills)
+    qa = (ctypes.c_int64 * k)(*qtys)
+    out_filled = ctypes.c_int64()
+    out_canceled = ctypes.c_uint8()
+    _check(_get().rocq_order_fsm_run(
+        q, fa, qa, k, ctypes.byref(out_filled), ctypes.byref(out_canceled)
+    ))
+    return OrderState(out_filled.value, bool(out_canceled.value))

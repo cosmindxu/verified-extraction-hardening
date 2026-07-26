@@ -11,6 +11,9 @@
 //!   - a zero `len` is always valid, whatever the pointer is
 //!   - unwinding is caught at the boundary, never allowed to cross it
 
+mod modexp;
+mod order_fsm;
+mod rle;
 mod sorting;
 mod trading;
 /// Same Rocq source, extracted with `ExtrRustCheckedArith`: every `Z`
@@ -223,6 +226,144 @@ pub unsafe extern "C" fn rocq_analyze(
             *out.add(0) = profit;
             *out.add(1) = dd;
             *out.add(2) = pos;
+            ROCQ_OK
+        }
+        Err(_) => ROCQ_ERR_PANIC,
+    }
+}
+
+/* ================= RLE codec ================= */
+
+/// Run-length encode `len` values. `out_vals`/`out_counts` must have room
+/// for `len` entries — sufficient by `encode_length_le`. Writes the number
+/// of runs to `out_n`.
+///
+/// # Safety
+/// `input` valid for `len` reads; `out_vals`/`out_counts` valid for `len`
+/// writes; `out_n` a valid pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rocq_rle_encode(
+    input: *const i64,
+    len: usize,
+    out_vals: *mut i64,
+    out_counts: *mut u64,
+    out_n: *mut usize,
+) -> i32 {
+    let Some(xs) = as_slice(input, len) else {
+        return ROCQ_ERR_NULL;
+    };
+    if out_n.is_null() || (len > 0 && (out_vals.is_null() || out_counts.is_null())) {
+        return ROCQ_ERR_NULL;
+    }
+    quiet_panics();
+    match catch_unwind(AssertUnwindSafe(|| rle::encode(xs))) {
+        Ok(v) => {
+            let n = v.len().min(len); // == v.len() by encode_length_le; clamp anyway
+            for (i, (val, cnt)) in v.into_iter().take(n).enumerate() {
+                *out_vals.add(i) = val;
+                *out_counts.add(i) = cnt;
+            }
+            *out_n = n;
+            ROCQ_OK
+        }
+        Err(_) => ROCQ_ERR_PANIC,
+    }
+}
+
+/// Returned by `rocq_rle_decode` when the decoded output exceeds `out_cap`.
+pub const ROCQ_ERR_CAPACITY: i32 = -3;
+
+/// Decode `n` (value, count) runs into `out` (capacity `out_cap`); writes
+/// the decoded length to `out_len`.
+///
+/// # Safety
+/// `vals`/`counts` valid for `n` reads; `out` valid for `out_cap` writes;
+/// `out_len` a valid pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rocq_rle_decode(
+    vals: *const i64,
+    counts: *const u64,
+    n: usize,
+    out: *mut i64,
+    out_cap: usize,
+    out_len: *mut usize,
+) -> i32 {
+    let (Some(vs), Some(cs)) = (as_slice(vals, n), as_slice(counts, n)) else {
+        return ROCQ_ERR_NULL;
+    };
+    if out_len.is_null() || (out_cap > 0 && out.is_null()) {
+        return ROCQ_ERR_NULL;
+    }
+    let pairs: Vec<(i64, u64)> = vs.iter().zip(cs).map(|(&v, &c)| (v, c)).collect();
+    quiet_panics();
+    match catch_unwind(AssertUnwindSafe(|| rle::decode(&pairs))) {
+        Ok(v) => {
+            if v.len() > out_cap {
+                return ROCQ_ERR_CAPACITY;
+            }
+            if !v.is_empty() {
+                std::ptr::copy_nonoverlapping(v.as_ptr(), out, v.len());
+            }
+            *out_len = v.len();
+            ROCQ_OK
+        }
+        Err(_) => ROCQ_ERR_PANIC,
+    }
+}
+
+/* ================= modular exponentiation ================= */
+
+/// `(b ^ e) mod m` (`pow_mod_correct`). Checked build: panics (contained,
+/// `ROCQ_ERR_PANIC`) on `m == 0` or intermediates outside u64 — the bindings
+/// enforce `1 <= m <= 2^32` (`safe_modulus`) so neither can happen.
+///
+/// # Safety
+/// `out` must be a valid `*mut u64`.
+#[no_mangle]
+pub unsafe extern "C" fn rocq_pow_mod(m: u64, b: u64, e: u64, out: *mut u64) -> i32 {
+    if out.is_null() {
+        return ROCQ_ERR_NULL;
+    }
+    quiet_panics();
+    match catch_unwind(AssertUnwindSafe(|| modexp::pow_mod(m, b, e))) {
+        Ok(v) => {
+            *out = v;
+            ROCQ_OK
+        }
+        Err(_) => ROCQ_ERR_PANIC,
+    }
+}
+
+/* ================= order FSM ================= */
+
+/// Run `n` events (`fills[i] != 0` => Fill(qtys[i]), else Cancel) against a
+/// fresh order of size `qty`. Writes final fill to `out_filled` and cancel
+/// flag to `out_canceled`. Safe for all event streams (`run_invariant`,
+/// `fill_add_bounded`); negative/overfilling fills are rejected in-machine.
+///
+/// # Safety
+/// `fills`/`qtys` valid for `n` reads; out pointers valid.
+#[no_mangle]
+pub unsafe extern "C" fn rocq_order_fsm_run(
+    qty: i64,
+    fills: *const u8,
+    qtys: *const i64,
+    n: usize,
+    out_filled: *mut i64,
+    out_canceled: *mut u8,
+) -> i32 {
+    let (Some(fs), Some(qs)) = (as_slice(fills, n), as_slice(qtys, n)) else {
+        return ROCQ_ERR_NULL;
+    };
+    if out_filled.is_null() || out_canceled.is_null() {
+        return ROCQ_ERR_NULL;
+    }
+    let evs: Vec<(bool, i64)> = fs.iter().zip(qs).map(|(&f, &q)| (f != 0, q)).collect();
+    quiet_panics();
+    match catch_unwind(AssertUnwindSafe(|| order_fsm::run(qty, &evs))) {
+        Ok((filled, canceled)) => {
+            *out_filled = filled;
+            *out_canceled = canceled as u8;
             ROCQ_OK
         }
         Err(_) => ROCQ_ERR_PANIC,
