@@ -18,19 +18,22 @@
     {
       "id": "bounds-cover-intermediates",
       "status": "pass",
-      "evidence": "mp_bounded and mdd_bounded in theories/Trading.v bound the accumulators (m, b / peak, worst) by induction over the scans' own recursion, not just the results. Pid: raw_fits_i64 bounds each product and the pre-clamp sum; Mpc: square_le/cost_bounded chain; SensorFusion: gate_fits_i64 covers both gate additions.",
+      "evidence": "mp_bounded and mdd_bounded in theories/Trading.v bound the accumulators (m, b / peak, worst) by induction over the scans' own recursion, not just the results. Pid: raw_fits_i64 bounds each product and the pre-clamp sum; Mpc: mpc_cost_bounded inducts over mpc's own recursion with a recursively defined budget CB; mpc_intermediate_fits covers every candidate the minimization compares; CB_cap evaluates the budget at the enforced domain (mpc_fits_i64, mpc_intermediate_fits_i64); SensorFusion: gate_fits_i64 covers both gate additions.",
       "theorems": [
         "mp_bounded",
         "mdd_bounded",
         "raw_fits_i64",
-        "cost_bounded",
-        "gate_fits_i64"
+        "gate_fits_i64",
+        "mpc_cost_bounded",
+        "mpc_intermediate_fits",
+        "CB_cap",
+        "mpc_fits_i64"
       ]
     },
     {
       "id": "safe-domain-proved-and-enforced",
       "status": "pass",
-      "evidence": "safe_price_bound = 2^62-1 defined in theories/Trading.v; max_profit_fits_i64 / max_drawdown_fits_i64 closed under the global context (Print Assumptions); python/rocq.py SAFE_PRICE_BOUND mirrors it and _enforce_price_domain rejects with DomainError citing the theorem. ModExp: safe_modulus = 2^32 proved sufficient (square_fits, mixed_fits, pow_mod_lt in theories/ModExp.v), mirrored as rocq.SAFE_MODULUS and enforced with DomainError; m = 0 rejected (pow_mod_correct hypothesis). Pid: PID_GAIN_MAX/PID_ERR_MAX; Hysteresis: THERMO_T_MAX (step_fits_i64); Mpc: MPC_STATE_MAX + MPC_HORIZON_MAX; SensorFusion: 2^62-1 (gate_fits_i64 — the prover rejected 2^62: f+tol could equal 2^63, one past i64::MAX).",
+      "evidence": "safe_price_bound = 2^62-1 defined in theories/Trading.v; max_profit_fits_i64 / max_drawdown_fits_i64 closed under the global context (Print Assumptions); python/rocq.py SAFE_PRICE_BOUND mirrors it and _enforce_price_domain rejects with DomainError citing the theorem. ModExp: safe_modulus = 2^32 proved sufficient (square_fits, mixed_fits, pow_mod_lt in theories/ModExp.v), mirrored as rocq.SAFE_MODULUS and enforced with DomainError; m = 0 rejected (pow_mod_correct hypothesis). Pid: PID_GAIN_MAX/PID_ERR_MAX; Hysteresis: THERMO_T_MAX (step_fits_i64); Mpc: MPC_STATE_MAX + MPC_HORIZON_MAX backed end-to-end by mpc_fits_i64/CB_cap; SensorFusion: 2^62-1 (gate_fits_i64 — the prover rejected 2^62: f+tol could equal 2^63, one past i64::MAX).",
       "theorems": [
         "max_profit_fits_i64",
         "max_drawdown_fits_i64",

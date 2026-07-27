@@ -176,15 +176,138 @@ Proof.
   nia.
 Qed.
 
-(** ... and the whole H_MAX-deep accumulated cost fits i64.  The concrete
-    chain: from |x| <= 2^20, eight plant steps stay within
-    B8 = 2^28 (loose: each step at most doubles-plus-10 the position
-    bound); each stage cost <= 5 * B8^2 < 2^59; eight stages < 2^62. *)
-Definition H_MAX : nat := 8%nat.
-Definition B8 : Z := 268435456.  (* 2^28: loose uniform state bound *)
+(** ... and now the airtight, end-to-end bound.  [CB h P V] is a cost
+    budget defined by recursion over the SAME structure as [mpc]: one
+    stage-cost bound for the children of a state in the (P, V) ball, plus
+    the budget of the grown ball ((P+V, V+10) -- what one plant step can
+    reach).  [mpc_cost_bounded] then proves, by the same induction [mpc]
+    computes with, that the returned cost -- and, via
+    [mpc_intermediate_fits], every candidate [cost + recursive cost] the
+    minimization compares -- stays within the budget.  [CB_cap] evaluates
+    the budget at the enforced domain (|state|, |ref| <= P_MAX, h <= 8) and
+    checks it against i64::MAX by computation. *)
 
-Lemma mpc_cost_fits_numeric : 8 * (5 * B8 * B8) <= i64_hi.
-Proof. unfold B8, i64_hi. lia. Qed.
+Definition H_MAX : nat := 8%nat.
+
+Fixpoint CB (h : nat) (P V : Z) : Z :=
+  match h with
+  | O => 0
+  | S h' =>
+      5 * (P + 2 * V + P_MAX + 10) * (P + 2 * V + P_MAX + 10)
+      + CB h' (P + V) (V + 10)
+  end.
+
+(** One plant step from the (P, V) ball lands in the (P+V, V+10) ball. *)
+Lemma child_bounds : forall s a P V,
+  - P <= m_pos s <= P -> - V <= m_vel s <= V ->
+  - (P + V) <= m_pos (plant s a) <= P + V /\
+  - (V + 10) <= m_vel (plant s a) <= V + 10.
+Proof.
+  intros s a P V Hp Hv. unfold plant.
+  destruct a; cbn [accel m_pos m_vel]; unfold ACC; lia.
+Qed.
+
+(** The budget is never negative (needed to chain stages). *)
+Lemma CB_nonneg : forall h P V, 0 <= P -> 0 <= V -> 0 <= CB h P V.
+Proof.
+  induction h as [| h IH]; intros P V HP HV; cbn [CB]; [lia |].
+  assert (Hsq : 0 <= 5 * (P + 2 * V + P_MAX + 10) * (P + 2 * V + P_MAX + 10))
+    by (unfold P_MAX; nia).
+  pose proof (IH (P + V) (V + 10) ltac:(lia) ltac:(lia)). lia.
+Qed.
+
+(** The main induction: over the SAME recursion as [mpc].  The conclusion
+    bounds the returned cost; the proof visits every candidate the
+    minimization compares, so each of them is bounded by the same budget
+    (packaged separately as [mpc_intermediate_fits]). *)
+Lemma mpc_cost_bounded : forall h P V r s,
+  0 <= P -> 0 <= V ->
+  - P <= m_pos s <= P -> - V <= m_vel s <= V ->
+  - P_MAX <= r <= P_MAX ->
+  0 <= fst (mpc r h s) <= CB h P V.
+Proof.
+  induction h as [| h IH]; intros P V r s HP HV Hp Hv Hr.
+  - cbn. lia.
+  - cbn [mpc CB].
+    assert (HB : (0 <= P + 2 * V + P_MAX + 10)) by (unfold P_MAX; lia).
+    (* the three children and their stage/recursive bounds *)
+    pose proof (child_bounds s ADec   P V Hp Hv) as [Hp1 Hv1].
+    pose proof (child_bounds s ACoast P V Hp Hv) as [Hp2 Hv2].
+    pose proof (child_bounds s AAcc   P V Hp Hv) as [Hp3 Hv3].
+    assert (Hc1 : 0 <= cost r (plant s ADec)
+                  <= 5 * (P + 2 * V + P_MAX + 10) * (P + 2 * V + P_MAX + 10))
+      by (apply cost_bounded; unfold P_MAX in *; lia).
+    assert (Hc2 : 0 <= cost r (plant s ACoast)
+                  <= 5 * (P + 2 * V + P_MAX + 10) * (P + 2 * V + P_MAX + 10))
+      by (apply cost_bounded; unfold P_MAX in *; lia).
+    assert (Hc3 : 0 <= cost r (plant s AAcc)
+                  <= 5 * (P + 2 * V + P_MAX + 10) * (P + 2 * V + P_MAX + 10))
+      by (apply cost_bounded; unfold P_MAX in *; lia).
+    assert (HI1 : 0 <= fst (mpc r h (plant s ADec)) <= CB h (P + V) (V + 10))
+      by (apply IH; try lia; assumption).
+    assert (HI2 : 0 <= fst (mpc r h (plant s ACoast)) <= CB h (P + V) (V + 10))
+      by (apply IH; try lia; assumption).
+    assert (HI3 : 0 <= fst (mpc r h (plant s AAcc)) <= CB h (P + V) (V + 10))
+      by (apply IH; try lia; assumption).
+    repeat match goal with
+           | |- context [if ?b then _ else _] => destruct b
+           end; simpl fst; lia.
+Qed.
+
+(** Every candidate the minimization compares is inside the budget too --
+    the "intermediates, not just the result" obligation, discharged. *)
+Corollary mpc_intermediate_fits : forall h P V r s a,
+  0 <= P -> 0 <= V ->
+  - P <= m_pos s <= P -> - V <= m_vel s <= V ->
+  - P_MAX <= r <= P_MAX ->
+  0 <= cost r (plant s a) + fst (mpc r h (plant s a)) <= CB (S h) P V.
+Proof.
+  intros h P V r s a HP HV Hp Hv Hr.
+  pose proof (child_bounds s a P V Hp Hv) as [Hp' Hv'].
+  assert (Hc : 0 <= cost r (plant s a)
+               <= 5 * (P + 2 * V + P_MAX + 10) * (P + 2 * V + P_MAX + 10))
+    by (apply cost_bounded; unfold P_MAX in *; lia).
+  assert (HI : 0 <= fst (mpc r h (plant s a)) <= CB h (P + V) (V + 10))
+    by (apply mpc_cost_bounded; try lia; assumption).
+  cbn [CB]. lia.
+Qed.
+
+(** Evaluating the budget at the enforced domain: for every h <= H_MAX,
+    CB h P_MAX P_MAX fits i64 -- checked by computation, case by case. *)
+Lemma CB_cap : forall h, (h <= H_MAX)%nat -> CB h P_MAX P_MAX <= i64_hi.
+Proof.
+  intros h Hh.
+  do 9 (destruct h as [| h]; [cbn [CB]; unfold P_MAX, i64_hi; lia |]).
+  exfalso. unfold H_MAX in Hh. lia.
+Qed.
+
+(** The end-to-end statement the bindings rely on. *)
+Theorem mpc_fits_i64 : forall h r s,
+  (h <= H_MAX)%nat ->
+  - P_MAX <= m_pos s <= P_MAX ->
+  - P_MAX <= m_vel s <= P_MAX ->
+  - P_MAX <= r <= P_MAX ->
+  0 <= fst (mpc r h s) <= i64_hi.
+Proof.
+  intros h r s Hh Hp Hv Hr.
+  assert (HP : 0 <= P_MAX) by (unfold P_MAX; lia).
+  pose proof (mpc_cost_bounded h P_MAX P_MAX r s HP HP Hp Hv Hr).
+  pose proof (CB_cap h Hh). lia.
+Qed.
+
+(** And for the intermediates at the top level. *)
+Corollary mpc_intermediate_fits_i64 : forall h r s a,
+  (S h <= H_MAX)%nat ->
+  - P_MAX <= m_pos s <= P_MAX ->
+  - P_MAX <= m_vel s <= P_MAX ->
+  - P_MAX <= r <= P_MAX ->
+  0 <= cost r (plant s a) + fst (mpc r h (plant s a)) <= i64_hi.
+Proof.
+  intros h r s a Hh Hp Hv Hr.
+  assert (HP : 0 <= P_MAX) by (unfold P_MAX; lia).
+  pose proof (mpc_intermediate_fits h P_MAX P_MAX r s a HP HP Hp Hv Hr).
+  pose proof (CB_cap (S h) Hh). lia.
+Qed.
 
 (** Extraction entry point: one receding-horizon decision. *)
 Definition mpc_demo (r pos vel : Z) (h : nat) : Z * act :=

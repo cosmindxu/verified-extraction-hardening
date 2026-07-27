@@ -204,7 +204,7 @@ state machines, feedback controllers, and multi-sensor fusion. Run them with
 | Hybrid energy FSM (SoC hysteresis) | [`HybridEnergyFsm.v`](theories/HybridEnergyFsm.v) | `run_soc_bounds`, `run_ev_floor`, `cs_charges` | designed out |
 | PID w/ anti-windup | [`Pid.v`](theories/Pid.v) | `output_saturated` + `integral_bounded` (unconditional), `raw_fits_i64` (proved domain) | two-tier |
 | Hysteresis relay (hybrid control) | [`Hysteresis.v`](theories/Hysteresis.v) | `no_chatter`, `band_invariant`, `cools_when_hot`/`heats_when_cold`, `step_fits_i64` | hypothesis-enforced |
-| Finite-set MPC | [`Mpc.v`](theories/Mpc.v) | `mpc_le_all`, `mpc_realizable`, `mpc_first_action_consistent` | proved domain |
+| Finite-set MPC | [`Mpc.v`](theories/Mpc.v) | `mpc_le_all`, `mpc_realizable`, `mpc_first_action_consistent`, `mpc_fits_i64` | proved domain |
 | Sensor fusion + plausibility | [`SensorFusion.v`](theories/SensorFusion.v) | `median_in_inputs`, `majority_band`, `accepted_near_fused`, `accepted_pairwise_consistent` | proved domain |
 
 All 19 theorems `Closed under the global context`. Highlights:
@@ -230,7 +230,12 @@ disturbance sequence ever exits it, plus strict progress toward the band
 from outside — practical stability as theorems. The MPC enumerates the full
 action tree, so optimality is a theorem, not a solver's claim: the reported
 cost is ≤ *every* length-h rollout and is achieved by one of them. The demo
-checks it against an exhaustive Python min over all 3⁵ sequences.
+checks it against an exhaustive Python min over all 3⁵ sequences. Its i64
+bound is airtight end to end: `CB` is a cost budget defined by recursion
+over the *same* structure as `mpc`, `mpc_cost_bounded` proves the returned
+cost — and via `mpc_intermediate_fits` every candidate the minimization
+compares — stays within it, and `CB_cap` evaluates the budget at the
+enforced domain against `i64::MAX` by computation.
 
 **Sensor fusion.** The median is computed by **the verified insertion sort
 from example 1** — cross-example reuse; its sortedness/permutation theorems

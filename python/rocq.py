@@ -666,7 +666,7 @@ def mpc_decide(reference: int, pos: int, vel: int, horizon: int = 5) -> MpcDecis
         if not -MPC_STATE_MAX <= v <= MPC_STATE_MAX:
             raise DomainError(
                 f"{name} = {v} exceeds MPC_STATE_MAX (+/-{MPC_STATE_MAX}); "
-                f"see the cost_bounded/B8 chain in theories/Mpc.v"
+                f"see mpc_fits_i64 in theories/Mpc.v"
             )
     if not isinstance(horizon, int) or isinstance(horizon, bool) or horizon < 0:
         raise TypeError(f"horizon must be a non-negative int, got {horizon!r}")
