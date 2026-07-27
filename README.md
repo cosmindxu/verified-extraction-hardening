@@ -23,6 +23,47 @@ Two things live here:
    **Python** over ctypes — including a reproducible demonstration of the
    width-remap leak and the three layers that close it.
 
+# Why: interoperability
+
+Safety cores do not live alone. Even in safety-critical systems, the
+complete ecosystem mixes with LLMs, machine learning, multimedia, and
+augmented user interfaces — and, at the very least in the **testing
+environments**, the safety cores interact with non-safe languages. The
+scenario generators, SiL/HiL harnesses, data pipelines, visualization
+dashboards, and increasingly the LLM agents that drive exploratory testing
+are Python (or JS, or notebooks) — so a verified core whose guarantees
+evaporate the moment it is called from the messy side has not actually
+shipped its guarantees anywhere.
+
+That is the motivation for this repo's shape:
+
+- **The boundary is the product.** The theorems live in Rocq; the callers
+  live everywhere else. Everything here — the C ABI (`cdylib`, callable
+  from any language, not just Python), the protection matrix, the
+  theorem-citing `DomainError`s, the checked-build backstop — is about
+  making the *crossing* preserve what was proved. Python in these examples
+  is a stand-in for the whole non-safe ecosystem.
+- **Degrees of trust can coexist.** This mirrors how safety standards
+  already think (ASIL-decomposed components interacting with QM software
+  under freedom-from-interference): the verified core does not require the
+  ML perception stack, the AR HMI, or the test rig to be trustworthy — it
+  requires the *interface* to reject, contain, or prove away everything
+  those callers can do wrong. The scene checker's validate-then-compute
+  architecture is that idea taken to its limit: a core that assumes
+  nothing at all about its caller.
+- **Machine-readable refusals are LLM-ready guardrails.** Every rejection
+  here cites a theorem (`"exceeds SAFE_COORD; see ingest_fits_i64 in
+  theories/SceneWorld.v"`). For a human that is documentation; for an LLM
+  agent calling the core as a tool, it is structured, actionable feedback —
+  the error message tells the model exactly which constraint to satisfy,
+  backed by a proof instead of a comment. A verified core with
+  theorem-citing errors is the right shape for the agentic ecosystems these
+  systems are growing into.
+
+The examples that follow are the working demonstration: fifteen verified
+cores from five domains, each crossing Rocq → Rust → C ABI → Python with
+its guarantees intact and its residual trust documented.
+
 # Rocq → Rust extraction examples
 
 Two examples:

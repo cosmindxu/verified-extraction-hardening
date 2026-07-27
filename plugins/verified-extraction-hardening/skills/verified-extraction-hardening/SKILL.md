@@ -5,6 +5,14 @@ description: Harden formally verified code (Rocq/Coq, Lean, F*) that is extracte
 
 # Hardening verified-extracted code across trust boundaries
 
+**Why this matters: interoperability.** Safety cores do not live alone — the
+surrounding ecosystem (ML stacks, LLM agents, multimedia, AR interfaces, and
+above all the Python-based test environments) is written in non-safe
+languages, and the core's guarantees must survive being called from there.
+The boundary is the product; the host language in any given project is a
+stand-in for the whole non-safe ecosystem. Theorem-citing rejection messages
+double as machine-readable guardrails for LLM callers.
+
 A theorem proved about a program in the prover does **not** automatically hold
 of the extracted binary. The guarantee leaks at three places, and each needs
 its own defense. This skill is the generalized method; a complete working
