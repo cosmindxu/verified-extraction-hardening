@@ -30,6 +30,7 @@ rust/rocq_ffi/src/pid.rs
 rust/rocq_ffi/src/thermo.rs
 rust/rocq_ffi/src/mpc.rs
 rust/rocq_ffi/src/fusion.rs
+rust/rocq_ffi/src/scene.rs
 
 # Cargo
 rust/*/target/

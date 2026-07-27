@@ -19,6 +19,7 @@ mod mpc;
 mod order_fsm;
 mod pid;
 mod rle;
+mod scene;
 mod sorting;
 mod thermo;
 mod trading;
@@ -591,6 +592,77 @@ pub unsafe extern "C" fn rocq_fusion_fuse(
             *out_fused = f;
             for (i, b) in flags.into_iter().take(n).enumerate() {
                 *out_flags.add(i) = b as u8;
+            }
+            ROCQ_OK
+        }
+        Err(_) => ROCQ_ERR_PANIC,
+    }
+}
+
+/* ================= ADAS scene checker ================= */
+
+/// Check a scene: road model + ego speed + `n` objects as parallel arrays
+/// (classes: 0 vehicle, 1 pedestrian, 2 bicycle, 3 sign, 4 light; tl
+/// states: 0 none, 1 red, 2 yellow, 3 green). Writes per-object verdicts
+/// (0 confirmed / 1 low / 2 implausible), scores and rule masks, plus the
+/// scene-level validity flag.
+///
+/// Total for ANY inputs (validate-then-compute architecture:
+/// validated_bounds + pair_arith_fits in SceneModel.v) — there is no
+/// domain for the caller to respect.
+///
+/// # Safety
+/// All input arrays valid for `n` reads; all output arrays valid for `n`
+/// writes; scalar out pointers valid.
+#[no_mangle]
+pub unsafe extern "C" fn rocq_scene_check(
+    lanes: i64, lane_w: i64, curv: i64, limit: i64,
+    ego_v: i64,
+    classes: *const u8,
+    xs: *const i64, ys: *const i64,
+    vxs: *const i64, vys: *const i64,
+    ws: *const i64, ls: *const i64,
+    confs: *const i64,
+    targets: *const u8,
+    tls: *const i64,
+    n: usize,
+    out_scene_ok: *mut u8,
+    out_verdicts: *mut u8,
+    out_scores: *mut i64,
+    out_masks: *mut i64,
+) -> i32 {
+    let (Some(cl), Some(x), Some(y), Some(vx), Some(vy), Some(w), Some(l),
+         Some(cf), Some(tg), Some(tl)) =
+        (as_slice(classes, n), as_slice(xs, n), as_slice(ys, n),
+         as_slice(vxs, n), as_slice(vys, n), as_slice(ws, n),
+         as_slice(ls, n), as_slice(confs, n), as_slice(targets, n),
+         as_slice(tls, n))
+    else {
+        return ROCQ_ERR_NULL;
+    };
+    if out_scene_ok.is_null()
+        || (n > 0
+            && (out_verdicts.is_null() || out_scores.is_null()
+                || out_masks.is_null()))
+    {
+        return ROCQ_ERR_NULL;
+    }
+    let objs: Vec<scene::SceneObj> = (0..n)
+        .map(|i| scene::SceneObj {
+            class: cl[i], x: x[i], y: y[i], vx: vx[i], vy: vy[i],
+            w: w[i], l: l[i], conf: cf[i], target: tg[i] != 0, tl: tl[i],
+        })
+        .collect();
+    quiet_panics();
+    match catch_unwind(AssertUnwindSafe(|| {
+        scene::check(lanes, lane_w, curv, limit, ego_v, &objs)
+    })) {
+        Ok((ok, entries)) => {
+            *out_scene_ok = ok as u8;
+            for (i, (v, sc, mask)) in entries.into_iter().take(n).enumerate() {
+                *out_verdicts.add(i) = v;
+                *out_scores.add(i) = sc;
+                *out_masks.add(i) = mask;
             }
             ROCQ_OK
         }

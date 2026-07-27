@@ -175,6 +175,15 @@ def _load() -> ctypes.CDLL:
     ]
     lib.rocq_fusion_fuse.restype = ctypes.c_int32
 
+    lib.rocq_scene_check.argtypes = [
+        ctypes.c_int64, ctypes.c_int64, ctypes.c_int64, ctypes.c_int64,
+        ctypes.c_int64,
+        u8p, i64p, i64p, i64p, i64p, i64p, i64p, i64p, u8p, i64p,
+        ctypes.c_size_t,
+        u8p, u8p, i64p, i64p,
+    ]
+    lib.rocq_scene_check.restype = ctypes.c_int32
+
     lib.rocq_order_fsm_run.argtypes = [
         ctypes.c_int64, u8p, i64p, ctypes.c_size_t, i64p,
         ctypes.POINTER(ctypes.c_uint8),
@@ -720,3 +729,123 @@ def fuse(readings: Sequence[int], tol: int) -> FusionReport:
     out_flags = (ctypes.c_uint8 * n)()
     _check(_get().rocq_fusion_fuse(tol, arr, n, ctypes.byref(out_f), out_flags))
     return FusionReport(out_f.value, [bool(b) for b in out_flags])
+
+
+# --------------------------------------------------------------------------
+# ADAS scene model with plausibility checking
+# --------------------------------------------------------------------------
+
+_SCENE_CLASSES = {"vehicle": 0, "pedestrian": 1, "bicycle": 2,
+                  "sign": 3, "light": 4}
+_TL_STATES = {"none": 0, "red": 1, "yellow": 2, "green": 3}
+
+#: Rule mask bits (mirrors the catalog in theories/SceneModel.v).
+SCENE_RULES = {
+    1: "ENV_DIM", 2: "ENV_SPEED", 4: "ENV_FOV", 8: "ENV_CONF",
+    16: "TGT_CLASS", 32: "OVERLAP",
+    128: "OFFROAD_VEHICLE", 256: "OFFROAD_BIKE", 512: "PED_ON_FAST_ROAD",
+    1024: "FURNITURE_IN_ROAD", 2048: "LIGHT_CONFLICT", 4096: "DUPLICATE",
+    8192: "TGT_BEHIND", 16384: "TGT_OFFLANE", 32768: "TGT_EXTRA",
+}
+
+_VERDICTS = ["confirmed", "low_confidence", "implausible"]
+
+
+#: Typical footprint per class (w, l in cm) used when dims are omitted.
+_DEFAULT_DIMS = {"vehicle": (180, 450), "pedestrian": (60, 60),
+                 "bicycle": (60, 180), "sign": (60, 60), "light": (40, 40)}
+
+
+class SceneObject(NamedTuple):
+    """One detected object. Units: cm, cm/s, confidence percent.
+
+    ``cls``: vehicle | pedestrian | bicycle | sign | light.
+    ``tl``: none | red | yellow | green (lights only).
+    ``w``/``l`` of 0 select a typical footprint for the class.
+    """
+    cls: str
+    x: int
+    y: int
+    vx: int = 0
+    vy: int = 0
+    w: int = 0
+    l: int = 0
+    conf: int = 90
+    target: bool = False
+    tl: str = "none"
+
+
+class Road(NamedTuple):
+    lanes: int = 3
+    lane_w: int = 350          # cm
+    curv: int = 0              # bounded units, validation-only in v1
+    limit: int = 1400          # cm/s
+
+
+class SceneEntry(NamedTuple):
+    verdict: str
+    score: int
+    rules: list[str]
+
+
+class SceneReport(NamedTuple):
+    scene_ok: bool
+    entries: list[SceneEntry]
+
+
+def check_scene(road: Road, ego_v: int, objects: Sequence[SceneObject]) -> SceneReport:
+    """Run the verified scene-consistency checker.
+
+    TOTAL for any i64 inputs: unary rules are comparisons only, and all
+    pairwise arithmetic is gated behind the envelope checks
+    (validate-then-compute — validated_bounds / pair_arith_fits in
+    theories/SceneModel.v). There is no input domain to enforce here.
+
+    Guarantees (all axiom-free theorems):
+      - one entry per object, in order (check_length);
+      - envelope violations are always 'implausible' (hard_env_implausible);
+      - a clean object keeps its sensor confidence — every downgrade cites
+        at least one rule in ``rules`` (clean_confirmed);
+      - 0 <= score <= 100 and score <= sensor confidence (score_bounds,
+        score_le_conf);
+      - duplicate/overlap pairs never lose BOTH members
+        (dup_at_most_one, overlap_at_most_one).
+    """
+    n = len(objects)
+    cls, xs, ys, vxs, vys, ws, ls, cfs, tgs, tls = ([] for _ in range(10))
+    for i, o in enumerate(objects):
+        if o.cls not in _SCENE_CLASSES:
+            raise ValueError(f"objects[{i}]: unknown class {o.cls!r}")
+        if o.tl not in _TL_STATES:
+            raise ValueError(f"objects[{i}]: unknown light state {o.tl!r}")
+        cls.append(_SCENE_CLASSES[o.cls])
+        xs.append(_as_i64(o.x, f"objects[{i}].x"))
+        ys.append(_as_i64(o.y, f"objects[{i}].y"))
+        vxs.append(_as_i64(o.vx, f"objects[{i}].vx"))
+        vys.append(_as_i64(o.vy, f"objects[{i}].vy"))
+        dw, dl = _DEFAULT_DIMS[o.cls]
+        ws.append(_as_i64(o.w if o.w else dw, f"objects[{i}].w"))
+        ls.append(_as_i64(o.l if o.l else dl, f"objects[{i}].l"))
+        cfs.append(_as_i64(o.conf, f"objects[{i}].conf"))
+        tgs.append(1 if o.target else 0)
+        tls.append(_TL_STATES[o.tl])
+    a64 = lambda v: (ctypes.c_int64 * n)(*v)
+    a8 = lambda v: (ctypes.c_uint8 * n)(*v)
+    out_ok = ctypes.c_uint8()
+    out_v = (ctypes.c_uint8 * n)()
+    out_s = (ctypes.c_int64 * n)()
+    out_m = (ctypes.c_int64 * n)()
+    _check(_get().rocq_scene_check(
+        _as_i64(road.lanes, "road.lanes"), _as_i64(road.lane_w, "road.lane_w"),
+        _as_i64(road.curv, "road.curv"), _as_i64(road.limit, "road.limit"),
+        _as_i64(ego_v, "ego_v"),
+        a8(cls), a64(xs), a64(ys), a64(vxs), a64(vys), a64(ws), a64(ls),
+        a64(cfs), a8(tgs), a64(tls), n,
+        ctypes.byref(out_ok), out_v, out_s, out_m,
+    ))
+    entries = [
+        SceneEntry(_VERDICTS[out_v[i]], out_s[i],
+                   [name for b, name in SCENE_RULES.items() if out_m[i] & b])
+        for i in range(n)
+    ]
+    return SceneReport(bool(out_ok.value), entries)

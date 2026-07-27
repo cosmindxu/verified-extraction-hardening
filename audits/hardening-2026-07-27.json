@@ -13,12 +13,12 @@
     {
       "id": "checked-arith-default",
       "status": "pass",
-      "evidence": "theories/ExtractTradingChecked.v imports ExtrRustCheckedArith; rust/rocq_ffi/src/trading_checked.rs contains checked_add/checked_sub/checked_mul/checked_neg; python/rocq.py defaults checked=True on max_profit/max_drawdown/run_orders. New examples (Rle, ModExp, OrderFsm) are extracted checked-only (theories/Extract{Rle,ModExp,OrderFsm}.v). Safety batch (DriveModeFsm, HybridEnergyFsm, Pid, Hysteresis, Mpc, SensorFusion) extracted checked-only."
+      "evidence": "theories/ExtractTradingChecked.v imports ExtrRustCheckedArith; rust/rocq_ffi/src/trading_checked.rs contains checked_add/checked_sub/checked_mul/checked_neg; python/rocq.py defaults checked=True on max_profit/max_drawdown/run_orders. New examples (Rle, ModExp, OrderFsm) are extracted checked-only (theories/Extract{Rle,ModExp,OrderFsm}.v). Safety batch (DriveModeFsm, HybridEnergyFsm, Pid, Hysteresis, Mpc, SensorFusion) extracted checked-only. SceneModel extracted checked-only."
     },
     {
       "id": "bounds-cover-intermediates",
       "status": "pass",
-      "evidence": "mp_bounded and mdd_bounded in theories/Trading.v bound the accumulators (m, b / peak, worst) by induction over the scans' own recursion, not just the results. Pid: raw_fits_i64 bounds each product and the pre-clamp sum; Mpc: mpc_cost_bounded inducts over mpc's own recursion with a recursively defined budget CB; mpc_intermediate_fits covers every candidate the minimization compares; CB_cap evaluates the budget at the enforced domain (mpc_fits_i64, mpc_intermediate_fits_i64); SensorFusion: gate_fits_i64 covers both gate additions.",
+      "evidence": "mp_bounded and mdd_bounded in theories/Trading.v bound the accumulators (m, b / peak, worst) by induction over the scans' own recursion, not just the results. Pid: raw_fits_i64 bounds each product and the pre-clamp sum; Mpc: mpc_cost_bounded inducts over mpc's own recursion with a recursively defined budget CB; mpc_intermediate_fits covers every candidate the minimization compares; CB_cap evaluates the budget at the enforced domain (mpc_fits_i64, mpc_intermediate_fits_i64); SensorFusion: gate_fits_i64 covers both gate additions. SceneModel: pair_arith_fits bounds every pair-rule intermediate on validated objects (validated_bounds).",
       "theorems": [
         "mp_bounded",
         "mdd_bounded",
@@ -27,7 +27,9 @@
         "mpc_cost_bounded",
         "mpc_intermediate_fits",
         "CB_cap",
-        "mpc_fits_i64"
+        "mpc_fits_i64",
+        "validated_bounds",
+        "pair_arith_fits"
       ]
     },
     {
@@ -45,7 +47,7 @@
     {
       "id": "eval-before-check-obligations",
       "status": "pass",
-      "evidence": "step computes `pos + qty` before range-checking; step_fits_i64 states the extra obligation limit + max|qty| <= i64_max; enforced in python/rocq.py run_orders. Contrast case: OrderFsm's guard compares before adding (fill_add_bounded), eliminating the obligation entirely — safe for all inputs. Pid raw is computed before the output clamp — discharged by raw_fits_i64. DriveModeFsm/HybridEnergyFsm avoid Z.abs/Z.opp on raw inputs (i64::MIN would panic checked negation): two-sided compares and constant regen instead.",
+      "evidence": "step computes `pos + qty` before range-checking; step_fits_i64 states the extra obligation limit + max|qty| <= i64_max; enforced in python/rocq.py run_orders. Contrast case: OrderFsm's guard compares before adding (fill_add_bounded), eliminating the obligation entirely — safe for all inputs. Pid raw is computed before the output clamp — discharged by raw_fits_i64. DriveModeFsm/HybridEnergyFsm avoid Z.abs/Z.opp on raw inputs (i64::MIN would panic checked negation): two-sided compares and constant regen instead. SceneModel inverts the pattern entirely: validate-then-compute — unary rules are comparisons only (total on any i64, incl. i64::MIN), all arithmetic gated behind envelope_ok.",
       "theorems": [
         "step_want_bounded",
         "step_fits_i64",
@@ -65,7 +67,7 @@
     {
       "id": "differential-test",
       "status": "pass",
-      "evidence": "python/demo.py: 2000 random series vs naive O(n^2) spec for max_profit and max_drawdown, 2000 random order sequences vs naive gate, plus 2000 random sort lists vs sorted(); rust/trading_main.rs repeats this natively with 5000 trials. All pass as of this audit's toolchain. demo_more.py: 2000 RLE roundtrips (+ length-bound and counts-positive witnesses), 2000 pow_mod trials vs Python's pow(), 2000 adversarial FSM event streams (fills across full i64) vs reference. demo_safety.py: 2000-trial differential runs per FSM/controller (inputs across full i64 where the posture allows), MPC vs exhaustive 3^5 enumeration (300 trials), 2000 fusion scenes with minority-arbitrary faults checking majority_band and pairwise consistency at runtime."
+      "evidence": "python/demo.py: 2000 random series vs naive O(n^2) spec for max_profit and max_drawdown, 2000 random order sequences vs naive gate, plus 2000 random sort lists vs sorted(); rust/trading_main.rs repeats this natively with 5000 trials. All pass as of this audit's toolchain. demo_more.py: 2000 RLE roundtrips (+ length-bound and counts-positive witnesses), 2000 pow_mod trials vs Python's pow(), 2000 adversarial FSM event streams (fills across full i64) vs reference. demo_safety.py: 2000-trial differential runs per FSM/controller (inputs across full i64 where the posture allows), MPC vs exhaustive 3^5 enumeration (300 trials), 2000 fusion scenes with minority-arbitrary faults checking majority_band and pairwise consistency at runtime. demo_scene.py: 16-object worked scene asserting every rule's verdict, 400 randomized scenes (30% fields drawn from full i64) checking check_length/score_bounds/score_le_conf/clean_confirmed/hard_env_implausible at runtime, plus an all-i64-extremes totality scene."
     },
     {
       "id": "panic-containment",
@@ -123,6 +125,12 @@
       "expected": "f + tol representable",
       "observed": "f + tol = 2^63 = i64::MAX + 1 — gate_fits_i64 unprovable; lia rejected the draft before any code shipped",
       "closed_by": "Bound tightened to 2^62 - 1; caught at proof time (the cheapest place to catch it)"
+    },
+    {
+      "input": "Any scene field at i64 extremes (e.g. x = i64::MIN) — no binding-side domain exists for the scene checker",
+      "expected": "total, correct hard-rejection",
+      "observed": "handled: unary rules use two-sided comparisons (no Z.abs/Z.opp on raw input, which would panic checked negation at i64::MIN); pair arithmetic unreachable for unvalidated objects",
+      "closed_by": "Architecture (validate-then-compute), proved by validated_bounds + pair_arith_fits rather than enforced at the boundary"
     }
   ]
 }

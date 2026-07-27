@@ -247,6 +247,71 @@ the plausibility gate accepts is mutually within `2·tol`. During
 development the prover caught an off-by-one in the sensor bound (2⁶² admits
 `f + tol = 2⁶³`, one past `i64::MAX`); the shipped bound is 2⁶²−1.
 
+# Example 12: ADAS scene model with plausibility checking
+
+[`theories/SceneModel.v`](theories/SceneModel.v) — the capstone: an
+ego-centric L5 scene (road model, ego state, and detected vehicles, the ACC
+target, pedestrians, bicycles, traffic signs, traffic lights) with a
+consistency checker whose purpose is to **invalidate false positives and
+flag low confidence — with a citable rule for every downgrade**.
+
+## The rule catalog
+
+**Hard** (physically impossible → `implausible`): class dimension envelopes
+(a 5 m-wide "pedestrian" is not a pedestrian), class speed envelopes
+(including |v_lateral| ≤ 5 m/s for vehicles and near-static signs/lights),
+sensor FOV/range, malformed confidence, non-vehicle ACC target, and deep
+bounding-box interpenetration with a validated object (the lower-priority
+one is killed).
+
+**Soft** (unusual → confidence penalty): vehicle/bicycle far off-road,
+pedestrian on the carriageway of a fast road, sign/light in the middle of
+the road, co-located lights showing red vs green, duplicate detections
+(same class, nearly same pose and velocity), and target-vehicle rules
+(behind ego, far off-lane, more than one target).
+
+Verdict: any hard rule → `implausible` (score 0); otherwise
+`score = max(0, confidence − penalties)`, `confirmed` iff score ≥ 60.
+
+## The product theorems (11, all axiom-free)
+
+| Theorem | The guarantee, in product terms |
+| --- | --- |
+| `check_length` | one entry per detection, in order |
+| `hard_env_implausible` | no aggregation path resurrects a physically impossible object |
+| `clean_confirmed` | a clean detection keeps its sensor confidence — **the checker never manufactures doubt**; every downgrade cites a rule |
+| `score_bounds` | 0 ≤ score ≤ 100 for *every* input |
+| `score_le_conf` | the checker never raises confidence |
+| `loser_antisym`, `dup_at_most_one`, `overlap_at_most_one` | a duplicate/overlap pair never loses **both** members — deduplication cannot delete a real object twice over |
+| `overlap_close_sym` | the geometry is symmetric; *who* gets penalized is decided by priority, not evaluation order |
+| `validated_bounds`, `pair_arith_fits` | the overflow architecture (below) |
+
+## Validate-then-compute: totality as architecture
+
+This example's overflow posture is the strongest in the repo: **the checker
+is total for any i64 inputs, with no domain for the caller to respect.**
+Unary rules are comparisons only — no `abs`, no negation of raw input, so
+even `i64::MIN` in every field is handled. All subtraction/multiplication
+lives in the pair rules, which run strictly *after* both operands passed
+the envelope; `validated_bounds` says what passing guarantees numerically,
+and `pair_arith_fits` bounds every pair-rule intermediate within ±2¹⁷.
+`demo_scene.py` feeds the checker scenes of pure i64 extremes: hard-rejected
+by comparisons, zero arithmetic performed on the wild values.
+
+The `dup_at_most_one` family deserves a highlight: penalizing the
+lower-priority member of a duplicate pair is easy to get subtly wrong (kill
+both and a real object vanishes from the scene). Here priority is a strict
+total order (confidence, then position), its antisymmetry is a theorem, and
+the pair rules inherit at-most-one from it.
+
+Scope honesty: curvature participates in validation only in this version
+(lateral positions are road-aligned); there is no occlusion reasoning, no
+temporal consistency (single-frame), and the constants (envelopes,
+penalties, thresholds) are engineering judgment — documented in the rule
+catalog, not derived. The theorems are about the *checker's logic*: rule
+extensions inherit the same guarantees as long as they keep the
+validate-then-compute discipline.
+
 ## Remap namespace skew (Rocq 9.1 gotcha)
 
 The plugin's `N.*` remaps target `Stdlib.NArith.BinNatDef`, but some stdlib

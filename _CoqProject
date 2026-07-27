@@ -25,3 +25,5 @@ theories/Mpc.v
 theories/ExtractMpc.v
 theories/SensorFusion.v
 theories/ExtractSensorFusion.v
+theories/SceneModel.v
+theories/ExtractSceneModel.v
