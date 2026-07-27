@@ -429,6 +429,32 @@ logic; differential tests against an independent reference catch units.
 Scope: longitudinal, same-lane, worst-case constant accelerations; the
 parameters are regulatory/engineering inputs.
 
+# Cross-language interop, demonstrated
+
+`make interop` runs two additional callers directly on the C ABI — the
+claim "callable from any language" as a demonstration rather than an
+architecture diagram:
+
+- **C** ([`interop/c/demo.c`](interop/c/demo.c)) against
+  [`include/rocq_ffi.h`](include/rocq_ffi.h) — the header is the interop
+  **contract**: every export with its status codes and, per function, the
+  proved domain a binding must enforce and the theorem that proves it
+  sufficient. The C demo also triggers the world-frame ingest overflow
+  deliberately: the checked build panics and the ABI reports
+  `ROCQ_ERR_PANIC` — containment holds for C callers too.
+- **Ruby** ([`interop/ruby/demo.rb`](interop/ruby/demo.rb)) via the stdlib
+  `Fiddle` FFI, zero gems — and it cross-checks `pow_mod` against Ruby's
+  own `Integer#pow`.
+
+The Fletcher checksum of the same frame agrees byte-for-byte across C,
+Ruby, and Python. The instructive part is what the non-Python callers
+**don't** get: the validation layer (proved-domain and hypothesis checks
+with theorem-citing errors) lives in the *binding*, not the ABI. A new
+language binding inherits layer (d) — status codes and contained panics —
+for free, and must re-implement layer (b) from the header's DOMAIN
+comments. That is the cost model of interop here: one verified core, one
+contract header, one thin validation layer per language.
+
 # Python interface protections, by example
 
 Every entry point applies the same layered model — **(a)** host-type

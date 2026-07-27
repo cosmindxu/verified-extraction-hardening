@@ -70,12 +70,12 @@
     {
       "id": "differential-test",
       "status": "pass",
-      "evidence": "python/demo.py: 2000 random series vs naive O(n^2) spec for max_profit and max_drawdown, 2000 random order sequences vs naive gate, plus 2000 random sort lists vs sorted(); rust/trading_main.rs repeats this natively with 5000 trials. All pass as of this audit's toolchain. demo_more.py: 2000 RLE roundtrips (+ length-bound and counts-positive witnesses), 2000 pow_mod trials vs Python's pow(), 2000 adversarial FSM event streams (fills across full i64) vs reference. demo_safety.py: 2000-trial differential runs per FSM/controller (inputs across full i64 where the posture allows), MPC vs exhaustive 3^5 enumeration (300 trials), 2000 fusion scenes with minority-arbitrary faults checking majority_band and pairwise consistency at runtime. demo_scene.py: 16-object worked scene asserting every rule's verdict, 400 randomized scenes (30% fields drawn from full i64) checking check_length/score_bounds/score_le_conf/clean_confirmed/hard_env_implausible at runtime, plus an all-i64-extremes totality scene. demo_scene.py SS4-5: world-frame vs ego-frame entry-for-entry equality at a 50 km pose (egress_ingest_id exercised); bypass demos show contained panics for both the ingest subtraction overflow and the i64::MIN negation. demo_integrity.py: 2000 random single-symbol corruptions all detected; 2000 RSS situations agree EXACTLY with the float reference (division-free form is exact); 2000 monotonicity spot-checks; the bypassed 0x00/0xFF Fletcher collision exhibited."
+      "evidence": "python/demo.py: 2000 random series vs naive O(n^2) spec for max_profit and max_drawdown, 2000 random order sequences vs naive gate, plus 2000 random sort lists vs sorted(); rust/trading_main.rs repeats this natively with 5000 trials. All pass as of this audit's toolchain. demo_more.py: 2000 RLE roundtrips (+ length-bound and counts-positive witnesses), 2000 pow_mod trials vs Python's pow(), 2000 adversarial FSM event streams (fills across full i64) vs reference. demo_safety.py: 2000-trial differential runs per FSM/controller (inputs across full i64 where the posture allows), MPC vs exhaustive 3^5 enumeration (300 trials), 2000 fusion scenes with minority-arbitrary faults checking majority_band and pairwise consistency at runtime. demo_scene.py: 16-object worked scene asserting every rule's verdict, 400 randomized scenes (30% fields drawn from full i64) checking check_length/score_bounds/score_le_conf/clean_confirmed/hard_env_implausible at runtime, plus an all-i64-extremes totality scene. demo_scene.py SS4-5: world-frame vs ego-frame entry-for-entry equality at a 50 km pose (egress_ingest_id exercised); bypass demos show contained panics for both the ingest subtraction overflow and the i64::MIN negation. demo_integrity.py: 2000 random single-symbol corruptions all detected; 2000 RSS situations agree EXACTLY with the float reference (division-free form is exact); 2000 monotonicity spot-checks; the bypassed 0x00/0xFF Fletcher collision exhibited. Cross-language: C and Ruby (stdlib Fiddle) callers agree with Python on the Fletcher checksum; Ruby cross-checks pow_mod against Integer#pow (make interop)."
     },
     {
       "id": "panic-containment",
       "status": "pass",
-      "evidence": "rust/rocq_ffi/src/lib.rs wraps every call into extracted code in catch_unwind; status codes ROCQ_OK/ROCQ_ERR_NULL/ROCQ_ERR_PANIC; quiet panic hook with ROCQ_FFI_VERBOSE opt-out; demo layer-1 test observes RocqError instead of a crash."
+      "evidence": "rust/rocq_ffi/src/lib.rs wraps every call into extracted code in catch_unwind; status codes ROCQ_OK/ROCQ_ERR_NULL/ROCQ_ERR_PANIC; quiet panic hook with ROCQ_FFI_VERBOSE opt-out; demo layer-1 test observes RocqError instead of a crash. Demonstrated from C as well (interop/c/demo.c: hostile world pose -> ROCQ_ERR_PANIC across the raw ABI)."
     },
     {
       "id": "coercion-rejection",
@@ -85,7 +85,7 @@
     {
       "id": "residual-tcb-documented",
       "status": "pass",
-      "evidence": "README section 'What is still trusted' names: extraction pretty-printer, remap table, FFI marshalling + ctypes packing, rustc/cargo."
+      "evidence": "README section 'What is still trusted' names: extraction pretty-printer, remap table, FFI marshalling + ctypes packing, rustc/cargo. include/rocq_ffi.h documents, per export, the proved domain a non-Python binding must re-implement (the validation layer lives in bindings, not the ABI)."
     }
   ],
   "residual_trusted_base": [

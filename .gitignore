@@ -43,3 +43,6 @@ rust/*/Cargo.lock
 __pycache__/
 *.pyc
 .nia.cache
+
+# interop build artifact
+interop/c/demo

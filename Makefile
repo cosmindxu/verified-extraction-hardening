@@ -48,7 +48,7 @@ BIN_T       := $(CRATE_T)/target/release/trading
 CRATE_F  := rust/rocq_ffi
 FFI_LIB  := $(CRATE_F)/target/release/librocq_ffi.so
 
-.PHONY: all rocq rust run compare trading python clean
+.PHONY: all rocq rust run compare trading python interop clean
 
 all: run
 
@@ -151,6 +151,20 @@ python: $(FFI_LIB)
 	@echo
 	cd python && python3 demo_integrity.py
 
+# Cross-language interop demos: C and Ruby directly on the C ABI.
+INTEROP_C := interop/c/demo
+$(INTEROP_C): interop/c/demo.c include/rocq_ffi.h $(FFI_LIB)
+	gcc -Wall -Wextra -O2 -Iinclude interop/c/demo.c \
+	  -L$(CRATE_F)/target/release -lrocq_ffi \
+	  -Wl,-rpath,'$$ORIGIN/../../rust/rocq_ffi/target/release' \
+	  -o $@
+
+interop: $(INTEROP_C)
+	@echo
+	./$(INTEROP_C)
+	@echo
+	ruby interop/ruby/demo.rb $(FFI_LIB)
+
 # Just the trading example.
 trading: $(MAIN_T)
 	cd $(CRATE_T) && cargo build --release
@@ -177,3 +191,4 @@ clean:
 	rm -f $(FFI_GENERATED)
 	rm -rf $(CRATE_1)/target $(CRATE_2)/target $(CRATE_T)/target $(CRATE_F)/target
 	rm -rf python/__pycache__
+	rm -f interop/c/demo
