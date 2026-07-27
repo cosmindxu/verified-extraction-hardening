@@ -32,6 +32,8 @@ rust/rocq_ffi/src/mpc.rs
 rust/rocq_ffi/src/fusion.rs
 rust/rocq_ffi/src/scene.rs
 rust/rocq_ffi/src/scene_world.rs
+rust/rocq_ffi/src/fletcher.rs
+rust/rocq_ffi/src/rss.rs
 
 # Cargo
 rust/*/target/

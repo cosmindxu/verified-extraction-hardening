@@ -29,3 +29,7 @@ theories/SceneModel.v
 theories/ExtractSceneModel.v
 theories/SceneWorld.v
 theories/ExtractSceneWorld.v
+theories/Fletcher.v
+theories/ExtractFletcher.v
+theories/Rss.v
+theories/ExtractRss.v

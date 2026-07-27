@@ -194,6 +194,15 @@ def _load() -> ctypes.CDLL:
     ]
     lib.rocq_scene_world_check.restype = ctypes.c_int32
 
+    lib.rocq_fletcher16.argtypes = [i64p, ctypes.c_size_t, i64p, i64p]
+    lib.rocq_fletcher16.restype = ctypes.c_int32
+    lib.rocq_rss_check.argtypes = [
+        ctypes.c_int64, ctypes.c_int64, ctypes.c_int64, ctypes.c_int64,
+        ctypes.c_int64, ctypes.c_int64, ctypes.c_int64,
+        u8p, i64p,
+    ]
+    lib.rocq_rss_check.restype = ctypes.c_int32
+
     lib.rocq_order_fsm_run.argtypes = [
         ctypes.c_int64, u8p, i64p, ctypes.c_size_t, i64p,
         ctypes.POINTER(ctypes.c_uint8),
@@ -990,3 +999,104 @@ def check_scene_world(
         for i in range(n)
     ]
     return SceneReport(bool(out_ok.value), entries)
+
+
+# --------------------------------------------------------------------------
+# Fletcher-16 checksum (data-link integrity)
+# --------------------------------------------------------------------------
+
+def fletcher16(data: Sequence[int], *, enforce_domain: bool = True) -> int:
+    """Fletcher-16 checksum (packed ``256*s2 + s1``) of mod-255 symbols.
+
+    Protections:
+      (a) symbols validated as true ints in i64 (TypeError/OverflowError);
+      (b) proved PROPERTY domain: every symbol must be in [0, 254] —
+          the hypothesis of ``single_error_detected`` (theories/Fletcher.v).
+          This domain guards a THEOREM, not an integer width: Fletcher
+          works mod 255, so 0 and 255 are congruent, and substituting one
+          for the other is exactly the corruption the checksum cannot see
+          (the classic Fletcher blind spot). ``enforce_domain=False``
+          neither crashes nor overflows — it silently forfeits the
+          detection guarantee (the demo exhibits the 0x00/0xFF collision);
+      (d) checked native build: a huge bypassed symbol overflows loudly
+          (RocqError), never silently.
+
+    Guaranteed on the domain: any single corrupted symbol changes the
+    checksum (``single_error_detected``); the sums stay in [0, 254]
+    (``run_bounds``); checksums are streamable (``fletcher_append``).
+    """
+    vals = list(data)
+    arr, n = _as_i64_array(vals, "data")
+    if enforce_domain:
+        for i, d in enumerate(vals):
+            if not 0 <= d <= 254:
+                raise DomainError(
+                    f"data[{i}] = {d} outside [0, 254], the hypothesis of "
+                    f"single_error_detected (theories/Fletcher.v). Symbols "
+                    f"are mod-255: 0 and 255 are congruent, so the "
+                    f"detection guarantee does not cover this input."
+                )
+    s1 = ctypes.c_int64()
+    s2 = ctypes.c_int64()
+    _check(_get().rocq_fletcher16(arr, n, ctypes.byref(s1), ctypes.byref(s2)))
+    return 256 * s2.value + s1.value
+
+
+# --------------------------------------------------------------------------
+# RSS safe following distance (division-free)
+# --------------------------------------------------------------------------
+
+#: RSS parameter domain (rss_dom / rss_fits_i64 in theories/Rss.v).
+RSS_D_MAX = 1_000_000     # gap, cm (10 km)
+RSS_V_MAX = 7_000         # speeds, cm/s
+RSS_RHO_MAX = 100         # response time, ticks
+RSS_ACC_MAX = 1_500       # accelerations, cm/s^2
+
+
+class RssResult(NamedTuple):
+    safe: bool
+    margin: int   # RSS inequality scaled by 2*b_min*b_max; >= 0 iff safe
+
+
+def rss_check(gap: int, v_rear: int, v_front: int, *,
+              rho: int = 10, a_max: int = 300,
+              b_min: int = 400, b_max: int = 800) -> RssResult:
+    """RSS-style longitudinal safe-distance check, division-free.
+
+    ``safe`` iff even in the worst case — rear accelerates at ``a_max``
+    for the response time ``rho`` then brakes at its weakest ``b_min``,
+    while the front brakes at its strongest ``b_max`` — no collision
+    occurs. ``margin`` is the inequality scaled by ``2*b_min*b_max``
+    (a graded severity signal).
+
+    Protections:
+      (a) all parameters validated as true ints in i64;
+      (b) proved domain (DomainError): gap in [0, 10 km], speeds in
+          [0, 70 m/s], rho in [1, 100], accelerations in [1, 15 m/s^2] —
+          ``rss_fits_i64`` proves every product the margin computes stays
+          within +-2^47 on exactly this domain;
+      (d) checked native build: bypassed overflow panics, contained.
+
+    Guaranteed (theories/Rss.v): the verdict is monotone the way physics
+    demands — more gap, a slower rear vehicle, or a faster front vehicle
+    can never turn safe into unsafe (``rss_monotone_distance``,
+    ``rss_antitone_rear_speed``, ``rss_monotone_front_speed``); a
+    stationary non-accelerating rear vehicle is safe at any gap
+    (``rss_standstill_safe``).
+    """
+    checks = [("gap", gap, 0, RSS_D_MAX), ("v_rear", v_rear, 0, RSS_V_MAX),
+              ("v_front", v_front, 0, RSS_V_MAX), ("rho", rho, 1, RSS_RHO_MAX),
+              ("a_max", a_max, 0, RSS_ACC_MAX), ("b_min", b_min, 1, RSS_ACC_MAX),
+              ("b_max", b_max, 1, RSS_ACC_MAX)]
+    for name, v, lo, hi in checks:
+        v = _as_i64(v, name)
+        if not lo <= v <= hi:
+            raise DomainError(
+                f"{name} = {v} outside [{lo}, {hi}] (rss_dom); rss_fits_i64 "
+                f"in theories/Rss.v proves i64 safety on exactly that domain"
+            )
+    out_s = ctypes.c_uint8()
+    out_m = ctypes.c_int64()
+    _check(_get().rocq_rss_check(b_min, b_max, gap, v_rear, v_front, rho,
+                                 a_max, ctypes.byref(out_s), ctypes.byref(out_m)))
+    return RssResult(bool(out_s.value), out_m.value)

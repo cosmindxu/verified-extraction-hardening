@@ -19,7 +19,7 @@ EXTRACTED_RLE := extracted/Rle.rs.out
 EXTRACTED_MX := extracted/ModExp.rs.out
 EXTRACTED_FSM := extracted/OrderFsm.rs.out
 # Safety-critical batch: extracted source -> FFI module -> API suffix
-SAFETY_MODS := drive_fsm energy_fsm pid thermo mpc fusion scene scene_world
+SAFETY_MODS := drive_fsm energy_fsm pid thermo mpc fusion scene scene_world fletcher rss
 SAFETY_SRC_drive_fsm := DriveModeFsm
 SAFETY_SRC_energy_fsm := HybridEnergyFsm
 SAFETY_SRC_pid := Pid
@@ -28,6 +28,8 @@ SAFETY_SRC_mpc := Mpc
 SAFETY_SRC_fusion := SensorFusion
 SAFETY_SRC_scene := SceneModel
 SAFETY_SRC_scene_world := SceneWorld
+SAFETY_SRC_fletcher := Fletcher
+SAFETY_SRC_rss := Rss
 SAFETY_API_drive_fsm := drive
 SAFETY_API_energy_fsm := energy
 SAFETY_API_pid := pid
@@ -36,6 +38,8 @@ SAFETY_API_mpc := mpc
 SAFETY_API_fusion := fusion
 SAFETY_API_scene := scene
 SAFETY_API_scene_world := scene_world
+SAFETY_API_fletcher := fletcher
+SAFETY_API_rss := rss
 CRATE_T     := rust/trading
 MAIN_T      := $(CRATE_T)/src/main.rs
 BIN_T       := $(CRATE_T)/target/release/trading
@@ -144,6 +148,8 @@ python: $(FFI_LIB)
 	cd python && python3 demo_safety.py
 	@echo
 	cd python && python3 demo_scene.py
+	@echo
+	cd python && python3 demo_integrity.py
 
 # Just the trading example.
 trading: $(MAIN_T)

@@ -340,6 +340,54 @@ on both the subtraction overflow and the `i64::MIN` negation.
 
 ---
 
+# Example 14: Fletcher-16 — a domain that guards a THEOREM, not a width
+
+[`theories/Fletcher.v`](theories/Fletcher.v): the classic data-link checksum
+(CAN-style frames, sensor buses), implemented division-free (conditional
+subtract, proved equal to mod-255 — `step1_mod`) and proved to **detect
+every single-symbol corruption** (`single_error_detected`), with the sums
+characterized (`fst_fletcher_sum`), bounded (`run_bounds`), and streamable
+(`fletcher_append`).
+
+The novel lesson is the *kind* of domain: `single_error_detected` assumes
+symbols in `[0, 254]`, and that hypothesis is load-bearing — Fletcher works
+mod 255, so **0 and 255 are congruent**: substituting one for the other is
+precisely the corruption the checksum cannot see (the classic Fletcher
+blind spot). Bypassing the binding's `DomainError` neither crashes nor
+overflows; it silently forfeits the *detection guarantee*, and
+`demo_integrity.py` exhibits the 0x00 ↔ 0xFF collision to prove it. Until
+now every proved domain in this repo guarded an integer width; this one
+guards a theorem. Both are "outside the proofs" — the failure mode just
+differs (wrong-answer risk vs lost-property risk).
+
+# Example 15: RSS safe following distance, division-free
+
+[`theories/Rss.v`](theories/Rss.v): the Responsibility-Sensitive Safety
+minimum-distance check — the formal safety envelope popularized for AVs.
+The textbook formula divides by braking rates; multiplying through by
+`200·b_min·b_max` yields an **equivalent polynomial inequality over the
+integers**: division-free, exactly representable (the demo shows exact
+agreement with the float reference on 2000 random situations — no epsilon),
+and provable:
+
+- `rss_monotone_distance` / `rss_antitone_rear_speed` /
+  `rss_monotone_front_speed`: the verdict moves the way physics demands —
+  more gap, a slower rear vehicle, or a faster front vehicle can never turn
+  safe into unsafe. A checker without these would flicker between verdicts
+  as a situation strictly improves.
+- `rss_standstill_safe`: a stationary, non-accelerating rear vehicle is
+  safe at any gap.
+- `rss_fits_i64`: the proved domain (gap ≤ 10 km, speeds ≤ 70 m/s,
+  ρ ≤ 5 s, accelerations ≤ 15 m/s²) keeps every product within ±2⁵⁰.
+
+Development honesty, recorded in the file header: the first draft had an
+integer *unit* inconsistency (ρ in whole seconds) that type-checked and
+proved fine — the monotonicity theorems are unit-blind — and was caught by
+the demo's physical sanity check against the float formula. Proofs catch
+logic; differential tests against an independent reference catch units.
+Scope: longitudinal, same-lane, worst-case constant accelerations; the
+parameters are regulatory/engineering inputs.
+
 # Python interface protections, by example
 
 Every entry point applies the same layered model — **(a)** host-type
@@ -368,6 +416,8 @@ needed:
 | `fuse` | `\|reading\|, tol ≤ 2⁶²−1` (`gate_fits_i64`) | non-empty readings, `tol ≥ 0` | gate computes `fused ± tol` |
 | `check_scene` | — **none exists** | — | validate-then-compute: total for any i64 (`validated_bounds`, `pair_arith_fits`) |
 | `check_scene_world` | `\|coord\|,\|vel\|,\|pose\| ≤ 2⁶²−1` (`ingest_fits_i64`) | `heading ∈ 0..3` (`egress_ingest_id`) | ingest subtracts/negates raw input, pre-validation |
+| `fletcher16` | symbols ∈ `[0, 254]` (`single_error_detected` **hypothesis** — guards the detection *property*, not a width) | — | bypass = silent loss of the guarantee (0≡255 mod 255), not overflow |
+| `rss_check` | full `rss_dom` (`rss_fits_i64`) | — | polynomial margin: products of speeds/accelerations |
 
 Reading the table top to bottom is reading the skill's argument: the "none
 needed" rows are designs that made the domain vanish; the theorem-cited rows

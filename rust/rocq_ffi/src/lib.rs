@@ -13,12 +13,14 @@
 
 mod drive_fsm;
 mod energy_fsm;
+mod fletcher;
 mod fusion;
 mod modexp;
 mod mpc;
 mod order_fsm;
 mod pid;
 mod rle;
+mod rss;
 mod scene;
 mod scene_world;
 mod sorting;
@@ -772,6 +774,71 @@ pub unsafe extern "C" fn rocq_analyze_checked(
             *out.add(0) = profit;
             *out.add(1) = dd;
             *out.add(2) = pos;
+            ROCQ_OK
+        }
+        Err(_) => ROCQ_ERR_PANIC,
+    }
+}
+
+/* ================= Fletcher-16 checksum ================= */
+
+/// Fletcher-16 over `n` symbols; writes s1 and s2 (packed checksum is
+/// 256*s2 + s1). Detection guarantee (`single_error_detected`) holds for
+/// symbols in [0, 254] — enforced by the bindings; out-of-range symbols
+/// do not overflow, they silently forfeit the PROPERTY (see Fletcher.v).
+///
+/// # Safety
+/// `data` valid for `n` reads; out pointers valid.
+#[no_mangle]
+pub unsafe extern "C" fn rocq_fletcher16(
+    data: *const i64,
+    n: usize,
+    out_s1: *mut i64,
+    out_s2: *mut i64,
+) -> i32 {
+    let Some(xs) = as_slice(data, n) else {
+        return ROCQ_ERR_NULL;
+    };
+    if out_s1.is_null() || out_s2.is_null() {
+        return ROCQ_ERR_NULL;
+    }
+    quiet_panics();
+    match catch_unwind(AssertUnwindSafe(|| fletcher::fletcher16(xs))) {
+        Ok((s1, s2)) => {
+            *out_s1 = s1;
+            *out_s2 = s2;
+            ROCQ_OK
+        }
+        Err(_) => ROCQ_ERR_PANIC,
+    }
+}
+
+/* ================= RSS safe distance ================= */
+
+/// RSS longitudinal safe-distance check (division-free). Writes the
+/// verdict and the scaled margin. Proved monotone (rss_monotone_*);
+/// i64-safe on the rss_dom domain (`rss_fits_i64`), enforced by the
+/// bindings, contained panic if bypassed.
+///
+/// # Safety
+/// Out pointers must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn rocq_rss_check(
+    b_min: i64, b_max: i64, gap: i64, v_rear: i64, v_front: i64,
+    rho: i64, a_max: i64,
+    out_safe: *mut u8,
+    out_margin: *mut i64,
+) -> i32 {
+    if out_safe.is_null() || out_margin.is_null() {
+        return ROCQ_ERR_NULL;
+    }
+    quiet_panics();
+    match catch_unwind(AssertUnwindSafe(|| {
+        rss::rss_check(b_min, b_max, gap, v_rear, v_front, rho, a_max)
+    })) {
+        Ok((safe, margin)) => {
+            *out_safe = safe as u8;
+            *out_margin = margin;
             ROCQ_OK
         }
         Err(_) => ROCQ_ERR_PANIC,

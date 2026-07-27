@@ -13,7 +13,7 @@
     {
       "id": "checked-arith-default",
       "status": "pass",
-      "evidence": "theories/ExtractTradingChecked.v imports ExtrRustCheckedArith; rust/rocq_ffi/src/trading_checked.rs contains checked_add/checked_sub/checked_mul/checked_neg; python/rocq.py defaults checked=True on max_profit/max_drawdown/run_orders. New examples (Rle, ModExp, OrderFsm) are extracted checked-only (theories/Extract{Rle,ModExp,OrderFsm}.v). Safety batch (DriveModeFsm, HybridEnergyFsm, Pid, Hysteresis, Mpc, SensorFusion) extracted checked-only. SceneModel extracted checked-only. SceneWorld extracted checked-only; rocq_analyze_checked added and made the Python default."
+      "evidence": "theories/ExtractTradingChecked.v imports ExtrRustCheckedArith; rust/rocq_ffi/src/trading_checked.rs contains checked_add/checked_sub/checked_mul/checked_neg; python/rocq.py defaults checked=True on max_profit/max_drawdown/run_orders. New examples (Rle, ModExp, OrderFsm) are extracted checked-only (theories/Extract{Rle,ModExp,OrderFsm}.v). Safety batch (DriveModeFsm, HybridEnergyFsm, Pid, Hysteresis, Mpc, SensorFusion) extracted checked-only. SceneModel extracted checked-only. SceneWorld extracted checked-only; rocq_analyze_checked added and made the Python default. Fletcher and Rss extracted checked-only."
     },
     {
       "id": "bounds-cover-intermediates",
@@ -35,14 +35,16 @@
     {
       "id": "safe-domain-proved-and-enforced",
       "status": "pass",
-      "evidence": "safe_price_bound = 2^62-1 defined in theories/Trading.v; max_profit_fits_i64 / max_drawdown_fits_i64 closed under the global context (Print Assumptions); python/rocq.py SAFE_PRICE_BOUND mirrors it and _enforce_price_domain rejects with DomainError citing the theorem. ModExp: safe_modulus = 2^32 proved sufficient (square_fits, mixed_fits, pow_mod_lt in theories/ModExp.v), mirrored as rocq.SAFE_MODULUS and enforced with DomainError; m = 0 rejected (pow_mod_correct hypothesis). Pid: PID_GAIN_MAX/PID_ERR_MAX; Hysteresis: THERMO_T_MAX (step_fits_i64); Mpc: MPC_STATE_MAX + MPC_HORIZON_MAX backed end-to-end by mpc_fits_i64/CB_cap; SensorFusion: 2^62-1 (gate_fits_i64 — the prover rejected 2^62: f+tol could equal 2^63, one past i64::MAX). SceneWorld: SAFE_COORD = 2^62-1 (ingest_fits_i64, incl. the i64::MIN-negation margin) enforced in check_scene_world; analyze() brought in line with its component functions (price domain + gate obligation + hypotheses, checked build default).",
+      "evidence": "safe_price_bound = 2^62-1 defined in theories/Trading.v; max_profit_fits_i64 / max_drawdown_fits_i64 closed under the global context (Print Assumptions); python/rocq.py SAFE_PRICE_BOUND mirrors it and _enforce_price_domain rejects with DomainError citing the theorem. ModExp: safe_modulus = 2^32 proved sufficient (square_fits, mixed_fits, pow_mod_lt in theories/ModExp.v), mirrored as rocq.SAFE_MODULUS and enforced with DomainError; m = 0 rejected (pow_mod_correct hypothesis). Pid: PID_GAIN_MAX/PID_ERR_MAX; Hysteresis: THERMO_T_MAX (step_fits_i64); Mpc: MPC_STATE_MAX + MPC_HORIZON_MAX backed end-to-end by mpc_fits_i64/CB_cap; SensorFusion: 2^62-1 (gate_fits_i64 — the prover rejected 2^62: f+tol could equal 2^63, one past i64::MAX). SceneWorld: SAFE_COORD = 2^62-1 (ingest_fits_i64, incl. the i64::MIN-negation margin) enforced in check_scene_world; analyze() brought in line with its component functions (price domain + gate obligation + hypotheses, checked build default). Fletcher: symbol domain [0,254] is the single_error_detected HYPOTHESIS — a property-guarding domain (0=255 mod 255), enforced with a DomainError explaining the blind spot. Rss: rss_dom enforced, rss_fits_i64 proves +-2^50.",
       "theorems": [
         "max_profit_fits_i64",
         "max_drawdown_fits_i64",
         "pow_mod_lt",
         "square_fits",
         "mixed_fits",
-        "ingest_fits_i64"
+        "ingest_fits_i64",
+        "single_error_detected",
+        "rss_fits_i64"
       ]
     },
     {
@@ -68,7 +70,7 @@
     {
       "id": "differential-test",
       "status": "pass",
-      "evidence": "python/demo.py: 2000 random series vs naive O(n^2) spec for max_profit and max_drawdown, 2000 random order sequences vs naive gate, plus 2000 random sort lists vs sorted(); rust/trading_main.rs repeats this natively with 5000 trials. All pass as of this audit's toolchain. demo_more.py: 2000 RLE roundtrips (+ length-bound and counts-positive witnesses), 2000 pow_mod trials vs Python's pow(), 2000 adversarial FSM event streams (fills across full i64) vs reference. demo_safety.py: 2000-trial differential runs per FSM/controller (inputs across full i64 where the posture allows), MPC vs exhaustive 3^5 enumeration (300 trials), 2000 fusion scenes with minority-arbitrary faults checking majority_band and pairwise consistency at runtime. demo_scene.py: 16-object worked scene asserting every rule's verdict, 400 randomized scenes (30% fields drawn from full i64) checking check_length/score_bounds/score_le_conf/clean_confirmed/hard_env_implausible at runtime, plus an all-i64-extremes totality scene. demo_scene.py SS4-5: world-frame vs ego-frame entry-for-entry equality at a 50 km pose (egress_ingest_id exercised); bypass demos show contained panics for both the ingest subtraction overflow and the i64::MIN negation."
+      "evidence": "python/demo.py: 2000 random series vs naive O(n^2) spec for max_profit and max_drawdown, 2000 random order sequences vs naive gate, plus 2000 random sort lists vs sorted(); rust/trading_main.rs repeats this natively with 5000 trials. All pass as of this audit's toolchain. demo_more.py: 2000 RLE roundtrips (+ length-bound and counts-positive witnesses), 2000 pow_mod trials vs Python's pow(), 2000 adversarial FSM event streams (fills across full i64) vs reference. demo_safety.py: 2000-trial differential runs per FSM/controller (inputs across full i64 where the posture allows), MPC vs exhaustive 3^5 enumeration (300 trials), 2000 fusion scenes with minority-arbitrary faults checking majority_band and pairwise consistency at runtime. demo_scene.py: 16-object worked scene asserting every rule's verdict, 400 randomized scenes (30% fields drawn from full i64) checking check_length/score_bounds/score_le_conf/clean_confirmed/hard_env_implausible at runtime, plus an all-i64-extremes totality scene. demo_scene.py SS4-5: world-frame vs ego-frame entry-for-entry equality at a 50 km pose (egress_ingest_id exercised); bypass demos show contained panics for both the ingest subtraction overflow and the i64::MIN negation. demo_integrity.py: 2000 random single-symbol corruptions all detected; 2000 RSS situations agree EXACTLY with the float reference (division-free form is exact); 2000 monotonicity spot-checks; the bypassed 0x00/0xFF Fletcher collision exhibited."
     },
     {
       "id": "panic-containment",
@@ -138,6 +140,12 @@
       "expected": "same protections as max_profit/run_orders (its components)",
       "observed": "documentation pass (2026-07-27) found the composite entry point weaker than its parts — an L2/L1 gap, silent-wrong reachable via analyze() with extreme prices",
       "closed_by": "rocq_analyze_checked export added; Python analyze() now enforces the price domain, gate obligation and hypotheses, checked by default"
+    },
+    {
+      "input": "Rss.v first draft: rho in whole seconds (integer-unit inconsistency)",
+      "expected": "verdicts matching the physical RSS formula",
+      "observed": "type-checked and PROVED fine — monotonicity theorems are unit-blind — but every verdict was physically wrong (80 m at 20 vs 15 m/s reported unsafe); caught by the demo's float-reference sanity check before commit",
+      "closed_by": "rho re-unitized to deciseconds, inequality rescaled by 200*b*B; recorded in the Rss.v header as the case for keeping differential tests alongside proofs"
     }
   ]
 }
