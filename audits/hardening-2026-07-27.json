@@ -13,7 +13,7 @@
     {
       "id": "checked-arith-default",
       "status": "pass",
-      "evidence": "theories/ExtractTradingChecked.v imports ExtrRustCheckedArith; rust/rocq_ffi/src/trading_checked.rs contains checked_add/checked_sub/checked_mul/checked_neg; python/rocq.py defaults checked=True on max_profit/max_drawdown/run_orders. New examples (Rle, ModExp, OrderFsm) are extracted checked-only (theories/Extract{Rle,ModExp,OrderFsm}.v). Safety batch (DriveModeFsm, HybridEnergyFsm, Pid, Hysteresis, Mpc, SensorFusion) extracted checked-only. SceneModel extracted checked-only."
+      "evidence": "theories/ExtractTradingChecked.v imports ExtrRustCheckedArith; rust/rocq_ffi/src/trading_checked.rs contains checked_add/checked_sub/checked_mul/checked_neg; python/rocq.py defaults checked=True on max_profit/max_drawdown/run_orders. New examples (Rle, ModExp, OrderFsm) are extracted checked-only (theories/Extract{Rle,ModExp,OrderFsm}.v). Safety batch (DriveModeFsm, HybridEnergyFsm, Pid, Hysteresis, Mpc, SensorFusion) extracted checked-only. SceneModel extracted checked-only. SceneWorld extracted checked-only; rocq_analyze_checked added and made the Python default."
     },
     {
       "id": "bounds-cover-intermediates",
@@ -35,13 +35,14 @@
     {
       "id": "safe-domain-proved-and-enforced",
       "status": "pass",
-      "evidence": "safe_price_bound = 2^62-1 defined in theories/Trading.v; max_profit_fits_i64 / max_drawdown_fits_i64 closed under the global context (Print Assumptions); python/rocq.py SAFE_PRICE_BOUND mirrors it and _enforce_price_domain rejects with DomainError citing the theorem. ModExp: safe_modulus = 2^32 proved sufficient (square_fits, mixed_fits, pow_mod_lt in theories/ModExp.v), mirrored as rocq.SAFE_MODULUS and enforced with DomainError; m = 0 rejected (pow_mod_correct hypothesis). Pid: PID_GAIN_MAX/PID_ERR_MAX; Hysteresis: THERMO_T_MAX (step_fits_i64); Mpc: MPC_STATE_MAX + MPC_HORIZON_MAX backed end-to-end by mpc_fits_i64/CB_cap; SensorFusion: 2^62-1 (gate_fits_i64 — the prover rejected 2^62: f+tol could equal 2^63, one past i64::MAX).",
+      "evidence": "safe_price_bound = 2^62-1 defined in theories/Trading.v; max_profit_fits_i64 / max_drawdown_fits_i64 closed under the global context (Print Assumptions); python/rocq.py SAFE_PRICE_BOUND mirrors it and _enforce_price_domain rejects with DomainError citing the theorem. ModExp: safe_modulus = 2^32 proved sufficient (square_fits, mixed_fits, pow_mod_lt in theories/ModExp.v), mirrored as rocq.SAFE_MODULUS and enforced with DomainError; m = 0 rejected (pow_mod_correct hypothesis). Pid: PID_GAIN_MAX/PID_ERR_MAX; Hysteresis: THERMO_T_MAX (step_fits_i64); Mpc: MPC_STATE_MAX + MPC_HORIZON_MAX backed end-to-end by mpc_fits_i64/CB_cap; SensorFusion: 2^62-1 (gate_fits_i64 — the prover rejected 2^62: f+tol could equal 2^63, one past i64::MAX). SceneWorld: SAFE_COORD = 2^62-1 (ingest_fits_i64, incl. the i64::MIN-negation margin) enforced in check_scene_world; analyze() brought in line with its component functions (price domain + gate obligation + hypotheses, checked build default).",
       "theorems": [
         "max_profit_fits_i64",
         "max_drawdown_fits_i64",
         "pow_mod_lt",
         "square_fits",
-        "mixed_fits"
+        "mixed_fits",
+        "ingest_fits_i64"
       ]
     },
     {
@@ -57,7 +58,7 @@
     {
       "id": "theorem-hypotheses-enforced",
       "status": "pass",
-      "evidence": "run_orders_within_limit assumes -lim <= pos0 <= lim; python/rocq.py rejects limit < 0 (empty interval) and initial outside [-limit, limit] with ValueError before calling native code. pow_mod: m != 0 and m <= safe_modulus enforced; run_order_events: qty >= 0 (init_run_invariant). thermo_run enforces |t0| <= 2^62 (band_invariant needs entry only for the band claim; fits needs the bound); fuse rejects empty readings (median_in_inputs hypothesis) and tol < 0."
+      "evidence": "run_orders_within_limit assumes -lim <= pos0 <= lim; python/rocq.py rejects limit < 0 (empty interval) and initial outside [-limit, limit] with ValueError before calling native code. pow_mod: m != 0 and m <= safe_modulus enforced; run_order_events: qty >= 0 (init_run_invariant). thermo_run enforces |t0| <= 2^62 (band_invariant needs entry only for the band claim; fits needs the bound); fuse rejects empty readings (median_in_inputs hypothesis) and tol < 0. check_scene_world rejects heading outside 0..3 (egress_ingest_id hypothesis)."
     },
     {
       "id": "boundary-value-test",
@@ -67,7 +68,7 @@
     {
       "id": "differential-test",
       "status": "pass",
-      "evidence": "python/demo.py: 2000 random series vs naive O(n^2) spec for max_profit and max_drawdown, 2000 random order sequences vs naive gate, plus 2000 random sort lists vs sorted(); rust/trading_main.rs repeats this natively with 5000 trials. All pass as of this audit's toolchain. demo_more.py: 2000 RLE roundtrips (+ length-bound and counts-positive witnesses), 2000 pow_mod trials vs Python's pow(), 2000 adversarial FSM event streams (fills across full i64) vs reference. demo_safety.py: 2000-trial differential runs per FSM/controller (inputs across full i64 where the posture allows), MPC vs exhaustive 3^5 enumeration (300 trials), 2000 fusion scenes with minority-arbitrary faults checking majority_band and pairwise consistency at runtime. demo_scene.py: 16-object worked scene asserting every rule's verdict, 400 randomized scenes (30% fields drawn from full i64) checking check_length/score_bounds/score_le_conf/clean_confirmed/hard_env_implausible at runtime, plus an all-i64-extremes totality scene."
+      "evidence": "python/demo.py: 2000 random series vs naive O(n^2) spec for max_profit and max_drawdown, 2000 random order sequences vs naive gate, plus 2000 random sort lists vs sorted(); rust/trading_main.rs repeats this natively with 5000 trials. All pass as of this audit's toolchain. demo_more.py: 2000 RLE roundtrips (+ length-bound and counts-positive witnesses), 2000 pow_mod trials vs Python's pow(), 2000 adversarial FSM event streams (fills across full i64) vs reference. demo_safety.py: 2000-trial differential runs per FSM/controller (inputs across full i64 where the posture allows), MPC vs exhaustive 3^5 enumeration (300 trials), 2000 fusion scenes with minority-arbitrary faults checking majority_band and pairwise consistency at runtime. demo_scene.py: 16-object worked scene asserting every rule's verdict, 400 randomized scenes (30% fields drawn from full i64) checking check_length/score_bounds/score_le_conf/clean_confirmed/hard_env_implausible at runtime, plus an all-i64-extremes totality scene. demo_scene.py SS4-5: world-frame vs ego-frame entry-for-entry equality at a 50 km pose (egress_ingest_id exercised); bypass demos show contained panics for both the ingest subtraction overflow and the i64::MIN negation."
     },
     {
       "id": "panic-containment",
@@ -77,7 +78,7 @@
     {
       "id": "coercion-rejection",
       "status": "pass",
-      "evidence": "python/rocq.py rejects float (TypeError, bool excluded via isinstance check), out-of-int64 (OverflowError); demo.py section 4 exercises all three rejections."
+      "evidence": "python/rocq.py rejects float (TypeError, bool excluded via isinstance check), out-of-int64 (OverflowError); demo.py section 4 exercises all three rejections. README now documents the per-example protection matrix (layers a-d) for all 16 entry points; every rocq.py docstring states its applicable protections and theorems."
     },
     {
       "id": "residual-tcb-documented",
@@ -131,6 +132,12 @@
       "expected": "total, correct hard-rejection",
       "observed": "handled: unary rules use two-sided comparisons (no Z.abs/Z.opp on raw input, which would panic checked negation at i64::MIN); pair arithmetic unreachable for unvalidated objects",
       "closed_by": "Architecture (validate-then-compute), proved by validated_bounds + pair_arith_fits rather than enforced at the boundary"
+    },
+    {
+      "input": "analyze() predating the documentation pass: no domain enforcement, unchecked build only",
+      "expected": "same protections as max_profit/run_orders (its components)",
+      "observed": "documentation pass (2026-07-27) found the composite entry point weaker than its parts — an L2/L1 gap, silent-wrong reachable via analyze() with extreme prices",
+      "closed_by": "rocq_analyze_checked export added; Python analyze() now enforces the price domain, gate obligation and hypotheses, checked by default"
     }
   ]
 }

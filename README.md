@@ -312,6 +312,71 @@ catalog, not derived. The theorems are about the *checker's logic*: rule
 extensions inherit the same guarantees as long as they keep the
 validate-then-compute discipline.
 
+# Example 13: world-frame ingestion — a domain the caller CAN get wrong
+
+[`theories/SceneWorld.v`](theories/SceneWorld.v) adapts example 12 to the
+interface many real stacks actually have: upstream fusion delivers tracks in
+**world coordinates** plus an ego pose, and the rules are ego-relative — so
+ingestion must compute `dx = x_world − ego_x` and rotate (negate) **before**
+any envelope can run. That arithmetic cannot be gated: it *produces* the
+values the gates need. A caller domain is now unavoidable:
+
+- `SAFE_COORD = 2⁶²−1`, proved sufficient by `ingest_fits_i64` — including
+  the sharp edge: the theorem's margin-of-one guarantees no intermediate
+  ever equals `i64::MIN`, whose negation is undefined.
+- `egress_ingest_id`: the quarter-turn pose transform is lossless, so
+  ego-frame checking is faithful to the world scene (the demo verifies
+  world-frame and ego-frame calls return identical entries).
+- `world_check_length`, `world_scores_bounded`: the example-12 guarantees
+  lift through ingestion unchanged.
+
+The pair of examples is the point: **same checker, two interfaces** — one
+with no domain at all (12), one where the domain is forced by the interface
+and must be derived, proved, and enforced (13). When you can choose the
+interface, choose 12's; when upstream chooses for you, 13 is the fallback
+discipline. `demo_scene.py` §5 shows all layers: `DomainError` citing
+`ingest_fits_i64`, then (bypassed) the checked build panicking — contained —
+on both the subtraction overflow and the `i64::MIN` negation.
+
+---
+
+# Python interface protections, by example
+
+Every entry point applies the same layered model — **(a)** host-type
+validation: true ints only, within i64, floats/bools rejected never coerced
+(`TypeError`/`OverflowError`); **(b)** proved-domain enforcement, with the
+error message citing the theorem (`DomainError`); **(c)** theorem-hypothesis
+enforcement (`ValueError`); **(d)** the checked-arithmetic native build as
+backstop — a bypassed or missed overflow panics and is contained at the FFI
+(`RocqError`), never silent. What varies per example is *which* layers are
+needed:
+
+| Entry point | (b) proved domain (theorem) | (c) hypotheses enforced | Why / notes |
+| --- | --- | --- | --- |
+| `sort` | — none needed | — | comparisons only; total on any i64 |
+| `max_profit`, `max_drawdown` | `\|price\| ≤ 2⁶²−1` (`max_profit_fits_i64`) | — | scans subtract prices |
+| `run_orders` | `limit + max\|qty\| ≤ i64::MAX` (`step_fits_i64`) | `limit ≥ 0`, initial ∈ `[-limit, limit]` | gate computes `pos+qty` **before** checking it |
+| `analyze` | both of the above | both of the above | composite call, same protections as its parts |
+| `rle_encode` / `rle_decode` | — none needed | decode size cap (allocation sanity) | counts bounded by input length; buffer sized by `encode_length_le` |
+| `pow_mod` | `m ≤ 2³²` (`square_fits`/`mixed_fits`) | `m ≠ 0` (`pow_mod_correct`) | products of values `< m` |
+| `run_order_events` | — none needed | `qty ≥ 0` (`init_run_invariant`) | guard compares **before** adding |
+| `drive_fsm_run` | — none needed | — | no arithmetic at all; two-sided compares, no `abs`/`opp` |
+| `energy_fsm_run` | — none needed | — | designed out: raw request only min-ed/compared |
+| `pid_run` | `\|gain\| ≤ 2¹⁵`, `\|err\| ≤ 2³¹` (`raw_fits_i64`) | — | `raw` computed before the output clamp |
+| `thermo_run` | `\|t0\| ≤ 2⁶²` (`step_fits_i64`) | — | plant adds a bounded rate to `t` |
+| `mpc_decide` | `\|state\|,\|ref\| ≤ 2²⁰`, `h ≤ 8` (`mpc_fits_i64`, `CB_cap`) | — | squared tracking costs over the horizon |
+| `fuse` | `\|reading\|, tol ≤ 2⁶²−1` (`gate_fits_i64`) | non-empty readings, `tol ≥ 0` | gate computes `fused ± tol` |
+| `check_scene` | — **none exists** | — | validate-then-compute: total for any i64 (`validated_bounds`, `pair_arith_fits`) |
+| `check_scene_world` | `\|coord\|,\|vel\|,\|pose\| ≤ 2⁶²−1` (`ingest_fits_i64`) | `heading ∈ 0..3` (`egress_ingest_id`) | ingest subtracts/negates raw input, pre-validation |
+
+Reading the table top to bottom is reading the skill's argument: the "none
+needed" rows are designs that made the domain vanish; the theorem-cited rows
+are domains that were **derived and proved**, not guessed; and every row has
+layer (d) underneath — `enforce_domain=False` (where offered) demonstrates
+the contained panic rather than a wrong answer. Full docstrings on every
+function in [`python/rocq.py`](python/rocq.py) restate the applicable
+protections and theorems.
+
 ## Remap namespace skew (Rocq 9.1 gotcha)
 
 The plugin's `N.*` remaps target `Stdlib.NArith.BinNatDef`, but some stdlib

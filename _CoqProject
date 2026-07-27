@@ -27,3 +27,5 @@ theories/SensorFusion.v
 theories/ExtractSensorFusion.v
 theories/SceneModel.v
 theories/ExtractSceneModel.v
+theories/SceneWorld.v
+theories/ExtractSceneWorld.v

@@ -20,6 +20,7 @@ mod order_fsm;
 mod pid;
 mod rle;
 mod scene;
+mod scene_world;
 mod sorting;
 mod thermo;
 mod trading;
@@ -664,6 +665,113 @@ pub unsafe extern "C" fn rocq_scene_check(
                 *out_scores.add(i) = sc;
                 *out_masks.add(i) = mask;
             }
+            ROCQ_OK
+        }
+        Err(_) => ROCQ_ERR_PANIC,
+    }
+}
+
+/* ================= world-frame scene checker ================= */
+
+/// Like `rocq_scene_check`, but objects are in WORLD coordinates and an
+/// ego pose (px, py, heading in quarter-turns CCW, world velocity) is
+/// supplied; the verified code ingests (translate + rotate) before
+/// checking. UNLIKE the ego-frame checker this has a caller domain:
+/// |coordinates|, |velocities|, |pose| <= 2^62 - 1 (`SAFE_COORD`,
+/// `ingest_fits_i64` in SceneWorld.v). Outside it the checked build
+/// panics — contained here as `ROCQ_ERR_PANIC`, never silent.
+///
+/// # Safety
+/// All input arrays valid for `n` reads; all output arrays valid for `n`
+/// writes; scalar out pointers valid.
+#[no_mangle]
+pub unsafe extern "C" fn rocq_scene_world_check(
+    lanes: i64, lane_w: i64, curv: i64, limit: i64,
+    px: i64, py: i64, ph: i64, pvx: i64, pvy: i64,
+    classes: *const u8,
+    xs: *const i64, ys: *const i64,
+    vxs: *const i64, vys: *const i64,
+    ws: *const i64, ls: *const i64,
+    confs: *const i64,
+    targets: *const u8,
+    tls: *const i64,
+    n: usize,
+    out_scene_ok: *mut u8,
+    out_verdicts: *mut u8,
+    out_scores: *mut i64,
+    out_masks: *mut i64,
+) -> i32 {
+    let (Some(cl), Some(x), Some(y), Some(vx), Some(vy), Some(w), Some(l),
+         Some(cf), Some(tg), Some(tl)) =
+        (as_slice(classes, n), as_slice(xs, n), as_slice(ys, n),
+         as_slice(vxs, n), as_slice(vys, n), as_slice(ws, n),
+         as_slice(ls, n), as_slice(confs, n), as_slice(targets, n),
+         as_slice(tls, n))
+    else {
+        return ROCQ_ERR_NULL;
+    };
+    if out_scene_ok.is_null()
+        || (n > 0
+            && (out_verdicts.is_null() || out_scores.is_null()
+                || out_masks.is_null()))
+    {
+        return ROCQ_ERR_NULL;
+    }
+    let objs: Vec<scene_world::SceneObj> = (0..n)
+        .map(|i| scene_world::SceneObj {
+            class: cl[i], x: x[i], y: y[i], vx: vx[i], vy: vy[i],
+            w: w[i], l: l[i], conf: cf[i], target: tg[i] != 0, tl: tl[i],
+        })
+        .collect();
+    quiet_panics();
+    match catch_unwind(AssertUnwindSafe(|| {
+        scene_world::check_world(lanes, lane_w, curv, limit,
+                                 px, py, ph, pvx, pvy, &objs)
+    })) {
+        Ok((ok, entries)) => {
+            *out_scene_ok = ok as u8;
+            for (i, (v, sc, mask)) in entries.into_iter().take(n).enumerate() {
+                *out_verdicts.add(i) = v;
+                *out_scores.add(i) = sc;
+                *out_masks.add(i) = mask;
+            }
+            ROCQ_OK
+        }
+        Err(_) => ROCQ_ERR_PANIC,
+    }
+}
+
+/// Overflow-checked `rocq_analyze` (same contract; wraps the
+/// ExtrRustCheckedArith build so i64 overflow panics instead of wrapping).
+///
+/// # Safety
+/// `px`/`sides`/`qtys` must be valid for their lengths; `out` for 3 elements.
+#[no_mangle]
+pub unsafe extern "C" fn rocq_analyze_checked(
+    px: *const i64,
+    px_len: usize,
+    limit: i64,
+    sides: *const u8,
+    qtys: *const i64,
+    os_len: usize,
+    out: *mut i64,
+) -> i32 {
+    let Some(xs) = as_slice(px, px_len) else {
+        return ROCQ_ERR_NULL;
+    };
+    let (Some(s), Some(q)) = (as_slice(sides, os_len), as_slice(qtys, os_len)) else {
+        return ROCQ_ERR_NULL;
+    };
+    if out.is_null() {
+        return ROCQ_ERR_NULL;
+    }
+    let os: Vec<(bool, i64)> = s.iter().zip(q).map(|(&b, &n)| (b != 0, n)).collect();
+    quiet_panics();
+    match catch_unwind(AssertUnwindSafe(|| trading_checked::analyze(xs, limit, &os))) {
+        Ok((profit, dd, pos)) => {
+            *out.add(0) = profit;
+            *out.add(1) = dd;
+            *out.add(2) = pos;
             ROCQ_OK
         }
         Err(_) => ROCQ_ERR_PANIC,

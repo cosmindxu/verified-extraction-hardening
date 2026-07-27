@@ -138,6 +138,57 @@ def main() -> int:
     print("  handled by comparisons alone (validate-then-compute):")
     print("  hard-rejected, zero arithmetic performed on the wild values")
 
+    rule("4. world-frame variant — same checker, now WITH a caller domain")
+
+    # Embed the ego frame at a far world pose, heading one quarter-turn CCW
+    # (ego drives along world +y). world = pose + unrot(ego), so the two
+    # calls must agree entry for entry — egress_ingest_id, exercised.
+    px, py = 5_000_000, -2_000_000          # 50 km / 20 km in cm
+
+    def to_world(o):
+        ux, uy = -o.y, o.x                  # unrot, heading = 1
+        return o._replace(x=ux + px, y=uy + py, vx=-o.vy, vy=o.vx)
+
+    ego_scene = [O("vehicle", 3000, 0, vx=1200, target=True),
+                 O("pedestrian", 1500, 700, vx=-100),
+                 O("vehicle", 3040, 20, vx=1180, conf=60),   # duplicate
+                 O("vehicle", 150000, 0)]                    # out of FOV
+    pose = rocq.WorldPose(px, py, heading=1, vx=0, vy=1300)
+    rep_e = rocq.check_scene(road, 1300, ego_scene)
+    rep_w = rocq.check_scene_world(road, pose, [to_world(o) for o in ego_scene])
+    assert rep_w.entries == rep_e.entries
+    print(f"  ego pose ({px}, {py}, heading=1): world-frame verdicts identical")
+    print("  to the ego-frame call — the ingest transform is lossless"
+          " (egress_ingest_id)")
+
+    rule("5. the domain, enforced — and what bypassing it costs")
+
+    try:
+        rocq.check_scene_world(road, rocq.WorldPose(2**62, 0), ego_scene)
+        return 1
+    except rocq.DomainError as ex:
+        print(f"  L2 DomainError: {str(ex).splitlines()[0]}")
+
+    try:
+        rocq.check_scene_world(road, rocq.WorldPose(-(2**62) - 1, 0),
+                               [O("vehicle", 2**62 - 1, 0)],
+                               enforce_domain=False)
+        return 1
+    except rocq.RocqError as ex:
+        print(f"  L1 bypassed subtraction overflow -> RocqError: {ex}")
+
+    try:
+        rocq.check_scene_world(road, rocq.WorldPose(2**62, 0, heading=2),
+                               [O("vehicle", -(2**62), 0)],
+                               enforce_domain=False)
+        return 1
+    except rocq.RocqError as ex:
+        print(f"  L1 negation of i64::MIN      -> RocqError: {ex}")
+    print("  (the margin-of-one in ingest_fits_i64 exists precisely for that"
+          " last trap)")
+    print("\n  Contrast: the ego-frame checker (sections 1-3) has NO such"
+          " domain at all.")
+
     print("\nAll checks passed.")
     return 0
 

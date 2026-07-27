@@ -184,16 +184,29 @@ def _load() -> ctypes.CDLL:
     ]
     lib.rocq_scene_check.restype = ctypes.c_int32
 
+    lib.rocq_scene_world_check.argtypes = [
+        ctypes.c_int64, ctypes.c_int64, ctypes.c_int64, ctypes.c_int64,
+        ctypes.c_int64, ctypes.c_int64, ctypes.c_int64, ctypes.c_int64,
+        ctypes.c_int64,
+        u8p, i64p, i64p, i64p, i64p, i64p, i64p, i64p, u8p, i64p,
+        ctypes.c_size_t,
+        u8p, u8p, i64p, i64p,
+    ]
+    lib.rocq_scene_world_check.restype = ctypes.c_int32
+
     lib.rocq_order_fsm_run.argtypes = [
         ctypes.c_int64, u8p, i64p, ctypes.c_size_t, i64p,
         ctypes.POINTER(ctypes.c_uint8),
     ]
     lib.rocq_order_fsm_run.restype = ctypes.c_int32
 
-    lib.rocq_analyze.argtypes = [
-        i64p, ctypes.c_size_t, ctypes.c_int64, u8p, i64p, ctypes.c_size_t, i64p
-    ]
-    lib.rocq_analyze.restype = ctypes.c_int32
+    for name in ("rocq_analyze", "rocq_analyze_checked"):
+        fn = getattr(lib, name)
+        fn.argtypes = [
+            i64p, ctypes.c_size_t, ctypes.c_int64, u8p, i64p,
+            ctypes.c_size_t, i64p
+        ]
+        fn.restype = ctypes.c_int32
 
     return lib
 
@@ -264,6 +277,11 @@ def sort(values: Iterable[int]) -> list[int]:
 
     The result is guaranteed sorted and a permutation of the input --
     ``insertion_sort_sorted`` and ``insertion_sort_perm``.
+
+    Protections: values are validated as true ints within i64
+    (TypeError/OverflowError; floats and bools rejected, never coerced).
+    No proved-domain bound is needed: the sort compares, it never computes,
+    so it is total on any i64s.
     """
     arr, n = _as_i64_array(values, "values")
     out = (ctypes.c_int64 * n)()
@@ -377,13 +395,41 @@ def analyze(
     prices: Iterable[int],
     limit: int,
     orders: Sequence[Order | tuple[bool, int]],
+    *,
+    checked: bool = True,
+    enforce_domain: bool = True,
 ) -> Analytics:
-    """All three analytics in a single native call."""
-    arr, pn = _as_i64_array(prices, "prices")
+    """All three analytics in a single native call.
+
+    Protections mirror the individual entry points: ``enforce_domain``
+    applies the proved price domain (``max_profit_fits_i64``), the gate's
+    evaluate-before-check obligation (``step_fits_i64``) and the theorem
+    hypotheses ``limit >= 0`` / initial position in range; ``checked``
+    selects the ExtrRustCheckedArith build so a bypassed overflow panics
+    (contained as :class:`RocqError`) instead of wrapping.
+    """
+    vals = list(prices)
+    arr, pn = _as_i64_array(vals, "prices")
     limit = _as_i64(limit, "limit")
+    if enforce_domain:
+        _enforce_price_domain(vals, "prices")
+        if limit < 0:
+            raise ValueError(
+                f"limit must be >= 0, got {limit}: the interval "
+                f"[{-limit}, {limit}] is empty, so run_orders_within_limit "
+                f"offers no guarantee"
+            )
     sides, qtys, on = _split_orders(orders)
+    if enforce_domain and on:
+        b = max(abs(q) for q in qtys)
+        if limit + b > I64_MAX:
+            raise DomainError(
+                f"limit ({limit}) + largest |qty| ({b}) exceeds int64; "
+                f"see step_fits_i64 in theories/Trading.v"
+            )
     out = (ctypes.c_int64 * 3)()
-    _check(_get().rocq_analyze(arr, pn, limit, sides, qtys, on, out))
+    fn = _get().rocq_analyze_checked if checked else _get().rocq_analyze
+    _check(fn(arr, pn, limit, sides, qtys, on, out))
     return Analytics(out[0], out[1], out[2])
 
 
@@ -839,6 +885,101 @@ def check_scene(road: Road, ego_v: int, objects: Sequence[SceneObject]) -> Scene
         _as_i64(road.lanes, "road.lanes"), _as_i64(road.lane_w, "road.lane_w"),
         _as_i64(road.curv, "road.curv"), _as_i64(road.limit, "road.limit"),
         _as_i64(ego_v, "ego_v"),
+        a8(cls), a64(xs), a64(ys), a64(vxs), a64(vys), a64(ws), a64(ls),
+        a64(cfs), a8(tgs), a64(tls), n,
+        ctypes.byref(out_ok), out_v, out_s, out_m,
+    ))
+    entries = [
+        SceneEntry(_VERDICTS[out_v[i]], out_s[i],
+                   [name for b, name in SCENE_RULES.items() if out_m[i] & b])
+        for i in range(n)
+    ]
+    return SceneReport(bool(out_ok.value), entries)
+
+
+#: World-frame ingest domain (SceneWorld.v: SAFE_COORD, ingest_fits_i64):
+#: every world coordinate, velocity and ego-pose field must satisfy
+#: |v| <= 2^62 - 1 so the ingest subtractions and rotation negations fit
+#: i64 (with a one-off margin below |i64::MIN|, whose negation is undefined).
+SAFE_COORD = 2**62 - 1
+
+
+class WorldPose(NamedTuple):
+    """Ego pose in the world frame. ``heading``: quarter-turns CCW from
+    world +x to ego forward (0..3). ``vx``/``vy``: ego world velocity."""
+    x: int
+    y: int
+    heading: int = 0
+    vx: int = 0
+    vy: int = 0
+
+
+def check_scene_world(
+    road: Road,
+    pose: WorldPose,
+    objects: Sequence[SceneObject],
+    *,
+    enforce_domain: bool = True,
+) -> SceneReport:
+    """World-frame variant of :func:`check_scene`.
+
+    Objects are in WORLD coordinates; the verified code ingests them
+    (translate by the ego pose, rotate by the quarter-turn heading) and
+    then runs the same checker, whose guarantees all lift
+    (world_check_length, world_scores_bounded; the transform is lossless —
+    egress_ingest_id).
+
+    UNLIKE :func:`check_scene`, this interface HAS a caller domain: the
+    ingest subtraction/negation happens on raw inputs, before any envelope
+    can run. ``enforce_domain`` rejects fields outside
+    ±``SAFE_COORD`` (= 2^62 - 1, proved sufficient by ``ingest_fits_i64``
+    in theories/SceneWorld.v) with :class:`DomainError`. Bypassing it makes
+    the checked build panic — surfaced as :class:`RocqError`, never a
+    silently corrupted scene.
+    """
+    if not isinstance(pose.heading, int) or not 0 <= pose.heading <= 3:
+        raise ValueError(
+            f"pose.heading must be 0..3 quarter-turns, got {pose.heading!r} "
+            f"(egress_ingest_id covers exactly these)"
+        )
+    def _dom(v, what):
+        v = _as_i64(v, what)
+        if enforce_domain and not -SAFE_COORD <= v <= SAFE_COORD:
+            raise DomainError(
+                f"{what} = {v} exceeds SAFE_COORD (+/-{SAFE_COORD}); outside "
+                f"ingest_fits_i64 (theories/SceneWorld.v) the ingest "
+                f"subtraction/negation can leave i64"
+            )
+        return v
+    n = len(objects)
+    cls, xs, ys, vxs, vys, ws, ls, cfs, tgs, tls = ([] for _ in range(10))
+    for i, o in enumerate(objects):
+        if o.cls not in _SCENE_CLASSES:
+            raise ValueError(f"objects[{i}]: unknown class {o.cls!r}")
+        if o.tl not in _TL_STATES:
+            raise ValueError(f"objects[{i}]: unknown light state {o.tl!r}")
+        cls.append(_SCENE_CLASSES[o.cls])
+        xs.append(_dom(o.x, f"objects[{i}].x"))
+        ys.append(_dom(o.y, f"objects[{i}].y"))
+        vxs.append(_dom(o.vx, f"objects[{i}].vx"))
+        vys.append(_dom(o.vy, f"objects[{i}].vy"))
+        dw, dl = _DEFAULT_DIMS[o.cls]
+        ws.append(_as_i64(o.w if o.w else dw, f"objects[{i}].w"))
+        ls.append(_as_i64(o.l if o.l else dl, f"objects[{i}].l"))
+        cfs.append(_as_i64(o.conf, f"objects[{i}].conf"))
+        tgs.append(1 if o.target else 0)
+        tls.append(_TL_STATES[o.tl])
+    a64 = lambda v: (ctypes.c_int64 * n)(*v)
+    a8 = lambda v: (ctypes.c_uint8 * n)(*v)
+    out_ok = ctypes.c_uint8()
+    out_v = (ctypes.c_uint8 * n)()
+    out_s = (ctypes.c_int64 * n)()
+    out_m = (ctypes.c_int64 * n)()
+    _check(_get().rocq_scene_world_check(
+        _as_i64(road.lanes, "road.lanes"), _as_i64(road.lane_w, "road.lane_w"),
+        _as_i64(road.curv, "road.curv"), _as_i64(road.limit, "road.limit"),
+        _dom(pose.x, "pose.x"), _dom(pose.y, "pose.y"),
+        pose.heading, _dom(pose.vx, "pose.vx"), _dom(pose.vy, "pose.vy"),
         a8(cls), a64(xs), a64(ys), a64(vxs), a64(vys), a64(ws), a64(ls),
         a64(cfs), a8(tgs), a64(tls), n,
         ctypes.byref(out_ok), out_v, out_s, out_m,
