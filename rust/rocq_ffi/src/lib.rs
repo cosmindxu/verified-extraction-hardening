@@ -11,10 +11,16 @@
 //!   - a zero `len` is always valid, whatever the pointer is
 //!   - unwinding is caught at the boundary, never allowed to cross it
 
+mod drive_fsm;
+mod energy_fsm;
+mod fusion;
 mod modexp;
+mod mpc;
 mod order_fsm;
+mod pid;
 mod rle;
 mod sorting;
+mod thermo;
 mod trading;
 /// Same Rocq source, extracted with `ExtrRustCheckedArith`: every `Z`
 /// operation becomes `checked_*().unwrap()`, so i64 overflow panics instead
@@ -364,6 +370,228 @@ pub unsafe extern "C" fn rocq_order_fsm_run(
         Ok((filled, canceled)) => {
             *out_filled = filled;
             *out_canceled = canceled as u8;
+            ROCQ_OK
+        }
+        Err(_) => ROCQ_ERR_PANIC,
+    }
+}
+
+/* ================= drive-mode FSM ================= */
+
+/// Run shift/fault events from Park. Events as parallel arrays:
+/// `tags[i]` 0=shift 1=fault 2=clear; `gears[i]` 0=P 1=R 2=N 3=D (shift
+/// only); `speeds[i]` cm/s. Final mode (0..=4, 4=Fault) to `out_mode`.
+/// Interlocks proved: park/reverse/drive engage gates, fault absorbing
+/// (DriveModeFsm.v). No arithmetic on speeds — any i64 is safe.
+///
+/// # Safety
+/// `tags`/`gears`/`speeds` valid for `n` reads; `out_mode` valid.
+#[no_mangle]
+pub unsafe extern "C" fn rocq_drive_fsm_run(
+    tags: *const u8,
+    gears: *const u8,
+    speeds: *const i64,
+    n: usize,
+    out_mode: *mut u8,
+) -> i32 {
+    let (Some(t), Some(g), Some(v)) =
+        (as_slice(tags, n), as_slice(gears, n), as_slice(speeds, n))
+    else {
+        return ROCQ_ERR_NULL;
+    };
+    if out_mode.is_null() {
+        return ROCQ_ERR_NULL;
+    }
+    let evs: Vec<(u8, u8, i64)> =
+        t.iter().zip(g).zip(v).map(|((&a, &b), &c)| (a, b, c)).collect();
+    quiet_panics();
+    match catch_unwind(AssertUnwindSafe(|| drive_fsm::run(&evs))) {
+        Ok(m) => {
+            *out_mode = m;
+            ROCQ_OK
+        }
+        Err(_) => ROCQ_ERR_PANIC,
+    }
+}
+
+/* ================= hybrid energy FSM ================= */
+
+/// Run power requests from initial SoC (per-mille, clamped into [0,1000]).
+/// Outputs final mode (0=EV 1=HybridAssist 2=ChargeSustain) and SoC.
+/// Proved: SoC bounds and the EV floor hold for EVERY request stream
+/// (HybridEnergyFsm.v) — no domain to enforce.
+///
+/// # Safety
+/// `reqs` valid for `n` reads; out pointers valid.
+#[no_mangle]
+pub unsafe extern "C" fn rocq_energy_fsm_run(
+    soc0: i64,
+    reqs: *const i64,
+    n: usize,
+    out_mode: *mut u8,
+    out_soc: *mut i64,
+) -> i32 {
+    let Some(rs) = as_slice(reqs, n) else {
+        return ROCQ_ERR_NULL;
+    };
+    if out_mode.is_null() || out_soc.is_null() {
+        return ROCQ_ERR_NULL;
+    }
+    quiet_panics();
+    match catch_unwind(AssertUnwindSafe(|| energy_fsm::run(soc0, rs))) {
+        Ok((m, soc)) => {
+            *out_mode = m;
+            *out_soc = soc;
+            ROCQ_OK
+        }
+        Err(_) => ROCQ_ERR_PANIC,
+    }
+}
+
+/* ================= PID ================= */
+
+/// Run the PID over `n` errors from the zero state; writes `n` outputs.
+/// Proved: every output in [-U_MAX, U_MAX] and the integral clamped, for
+/// ALL inputs; intermediates fit i64 for |gains| <= 2^15, |errors| <= 2^31
+/// (Pid.v) — the bindings enforce the latter.
+///
+/// # Safety
+/// `errors` valid for `n` reads; `out_us` valid for `n` writes; out
+/// pointers valid.
+#[no_mangle]
+pub unsafe extern "C" fn rocq_pid_run(
+    kp: i64,
+    ki: i64,
+    kd: i64,
+    errors: *const i64,
+    n: usize,
+    out_us: *mut i64,
+    out_integ: *mut i64,
+    out_prev: *mut i64,
+) -> i32 {
+    let Some(es) = as_slice(errors, n) else {
+        return ROCQ_ERR_NULL;
+    };
+    if (n > 0 && out_us.is_null()) || out_integ.is_null() || out_prev.is_null() {
+        return ROCQ_ERR_NULL;
+    }
+    quiet_panics();
+    match catch_unwind(AssertUnwindSafe(|| pid::run(kp, ki, kd, es))) {
+        Ok((us, integ, prev)) => {
+            let m = us.len().min(n);
+            if m > 0 {
+                std::ptr::copy_nonoverlapping(us.as_ptr(), out_us, m);
+            }
+            *out_integ = integ;
+            *out_prev = prev;
+            ROCQ_OK
+        }
+        Err(_) => ROCQ_ERR_PANIC,
+    }
+}
+
+/* ================= hysteresis thermostat ================= */
+
+/// Closed-loop thermostat from `t0` (heater off) under per-step
+/// disturbance rates (clamped in-machine to [1, RMAX]). Proved: band
+/// invariance, no chattering, strict progress (Hysteresis.v); i64 safety
+/// for |t0| <= 2^62 — enforced by the bindings.
+///
+/// # Safety
+/// `rhs`/`rcs` valid for `n` reads; out pointers valid.
+#[no_mangle]
+pub unsafe extern "C" fn rocq_thermo_run(
+    t0: i64,
+    rhs: *const i64,
+    rcs: *const i64,
+    n: usize,
+    out_t: *mut i64,
+    out_heating: *mut u8,
+) -> i32 {
+    let (Some(rh), Some(rc)) = (as_slice(rhs, n), as_slice(rcs, n)) else {
+        return ROCQ_ERR_NULL;
+    };
+    if out_t.is_null() || out_heating.is_null() {
+        return ROCQ_ERR_NULL;
+    }
+    let ds: Vec<(i64, i64)> = rh.iter().zip(rc).map(|(&a, &b)| (a, b)).collect();
+    quiet_panics();
+    match catch_unwind(AssertUnwindSafe(|| thermo::run(t0, &ds))) {
+        Ok((t, h)) => {
+            *out_t = t;
+            *out_heating = h as u8;
+            ROCQ_OK
+        }
+        Err(_) => ROCQ_ERR_PANIC,
+    }
+}
+
+/* ================= finite-set MPC ================= */
+
+/// One receding-horizon decision: minimize accumulated tracking cost over
+/// the depth-`horizon` action tree. Writes predicted cost and the first
+/// action (-1/0/+1). Proved optimal over the enumerated set (mpc_le_all,
+/// mpc_realizable in Mpc.v); i64-safe for |pos|,|vel|,|ref| <= 2^20 and
+/// horizon <= 8 — enforced by the bindings.
+///
+/// # Safety
+/// Out pointers must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn rocq_mpc_decide(
+    reference: i64,
+    pos: i64,
+    vel: i64,
+    horizon: u64,
+    out_cost: *mut i64,
+    out_action: *mut i8,
+) -> i32 {
+    if out_cost.is_null() || out_action.is_null() {
+        return ROCQ_ERR_NULL;
+    }
+    quiet_panics();
+    match catch_unwind(AssertUnwindSafe(|| mpc::decide(reference, pos, vel, horizon))) {
+        Ok((c, a)) => {
+            *out_cost = c;
+            *out_action = a;
+            ROCQ_OK
+        }
+        Err(_) => ROCQ_ERR_PANIC,
+    }
+}
+
+/* ================= sensor fusion ================= */
+
+/// Median-fuse `n` readings and gate each against the fused value with
+/// tolerance `tol`. Writes fused value and per-reading flags (0/1).
+/// Proved: median is one of the readings, majority-band fault masking,
+/// pairwise 2*tol scene consistency (SensorFusion.v — the median uses the
+/// verified insertion sort); i64-safe for |values|, tol <= 2^62 - 1 —
+/// enforced by the bindings.
+///
+/// # Safety
+/// `readings` valid for `n` reads; `out_flags` valid for `n` writes;
+/// `out_fused` valid.
+#[no_mangle]
+pub unsafe extern "C" fn rocq_fusion_fuse(
+    tol: i64,
+    readings: *const i64,
+    n: usize,
+    out_fused: *mut i64,
+    out_flags: *mut u8,
+) -> i32 {
+    let Some(rs) = as_slice(readings, n) else {
+        return ROCQ_ERR_NULL;
+    };
+    if out_fused.is_null() || (n > 0 && out_flags.is_null()) {
+        return ROCQ_ERR_NULL;
+    }
+    quiet_panics();
+    match catch_unwind(AssertUnwindSafe(|| fusion::fuse(tol, rs))) {
+        Ok((f, flags)) => {
+            *out_fused = f;
+            for (i, b) in flags.into_iter().take(n).enumerate() {
+                *out_flags.add(i) = b as u8;
+            }
             ROCQ_OK
         }
         Err(_) => ROCQ_ERR_PANIC,

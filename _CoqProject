@@ -13,3 +13,15 @@ theories/ModExp.v
 theories/ExtractModExp.v
 theories/OrderFsm.v
 theories/ExtractOrderFsm.v
+theories/DriveModeFsm.v
+theories/ExtractDriveModeFsm.v
+theories/HybridEnergyFsm.v
+theories/ExtractHybridEnergyFsm.v
+theories/Pid.v
+theories/ExtractPid.v
+theories/Hysteresis.v
+theories/ExtractHysteresis.v
+theories/Mpc.v
+theories/ExtractMpc.v
+theories/SensorFusion.v
+theories/ExtractSensorFusion.v

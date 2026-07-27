@@ -192,6 +192,56 @@ Notes worth stealing:
 - The order FSM demo throws fills drawn from the whole i64 range at the
   checked build: it never panics, because there is nothing to catch.
 
+# Examples 6–11: safety-critical cores
+
+Six examples in the domains where a verified core earns its keep: automotive
+state machines, feedback controllers, and multi-sensor fusion. Run them with
+`make python` (section `demo_safety.py`).
+
+| Example | Theory | Headline theorems | Posture |
+| --- | --- | --- | --- |
+| Drive-mode FSM (PRND+Fault) | [`DriveModeFsm.v`](theories/DriveModeFsm.v) | `park_interlock`, `reverse_interlock`, `drive_interlock`, `fault_absorbing`, `run_fault_sticky` | no arithmetic at all |
+| Hybrid energy FSM (SoC hysteresis) | [`HybridEnergyFsm.v`](theories/HybridEnergyFsm.v) | `run_soc_bounds`, `run_ev_floor`, `cs_charges` | designed out |
+| PID w/ anti-windup | [`Pid.v`](theories/Pid.v) | `output_saturated` + `integral_bounded` (unconditional), `raw_fits_i64` (proved domain) | two-tier |
+| Hysteresis relay (hybrid control) | [`Hysteresis.v`](theories/Hysteresis.v) | `no_chatter`, `band_invariant`, `cools_when_hot`/`heats_when_cold`, `step_fits_i64` | hypothesis-enforced |
+| Finite-set MPC | [`Mpc.v`](theories/Mpc.v) | `mpc_le_all`, `mpc_realizable`, `mpc_first_action_consistent` | proved domain |
+| Sensor fusion + plausibility | [`SensorFusion.v`](theories/SensorFusion.v) | `median_in_inputs`, `majority_band`, `accepted_near_fused`, `accepted_pairwise_consistent` | proved domain |
+
+All 19 theorems `Closed under the global context`. Highlights:
+
+**State machines.** The drive-mode FSM proves real transmission interlocks:
+Park engages only near standstill (parking-pawl protection), a direction
+change only below 1.5 m/s, and Fault is absorbing until an explicit clear
+*at standstill*. Rejected shifts keep the current mode — "reject, don't
+clamp" is what makes each interlock a case analysis instead of an arithmetic
+argument. There is **no arithmetic on speeds at all**: guards are two-sided
+comparisons rather than `Z.abs`, deliberately, because `Z.abs`/`Z.opp` on
+`i64::MIN` panics the checked build. The energy FSM adds hysteresis
+(enter charge-sustain at SoC 200‰, leave at 850‰) with the invariant that
+EV-only mode never operates below its floor — for *every* request stream.
+
+**Controllers.** The PID's two theorem tiers are the point: saturation and
+anti-windup hold *unconditionally* (clamps), but the raw command is computed
+**before** the clamp — the same evaluate-before-check obligation as the
+trading gate — so `raw_fits_i64` proves the domain (|gain| ≤ 2¹⁵,
+|error| ≤ 2³¹) and the bindings enforce it. The hysteresis loop proves an
+**invariant set of the closed loop**: enter `[130, 270]` and no bounded
+disturbance sequence ever exits it, plus strict progress toward the band
+from outside — practical stability as theorems. The MPC enumerates the full
+action tree, so optimality is a theorem, not a solver's claim: the reported
+cost is ≤ *every* length-h rollout and is achieved by one of them. The demo
+checks it against an exhaustive Python min over all 3⁵ sequences.
+
+**Sensor fusion.** The median is computed by **the verified insertion sort
+from example 1** — cross-example reuse; its sortedness/permutation theorems
+are load-bearing here. `majority_band` is the fault-masking theorem: a
+strict majority of sensors agreeing within a band captures the fused value,
+so a minority of arbitrarily-faulty sensors cannot drag it out.
+`accepted_pairwise_consistent` is the scene-consistency guarantee: everything
+the plausibility gate accepts is mutually within `2·tol`. During
+development the prover caught an off-by-one in the sensor bound (2⁶² admits
+`f + tol = 2⁶³`, one past `i64::MAX`); the shipped bound is 2⁶²−1.
+
 ## Remap namespace skew (Rocq 9.1 gotcha)
 
 The plugin's `N.*` remaps target `Stdlib.NArith.BinNatDef`, but some stdlib

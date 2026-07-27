@@ -18,6 +18,20 @@ EXTRACTED_TC := extracted/TradingChecked.rs.out
 EXTRACTED_RLE := extracted/Rle.rs.out
 EXTRACTED_MX := extracted/ModExp.rs.out
 EXTRACTED_FSM := extracted/OrderFsm.rs.out
+# Safety-critical batch: extracted source -> FFI module -> API suffix
+SAFETY_MODS := drive_fsm energy_fsm pid thermo mpc fusion
+SAFETY_SRC_drive_fsm := DriveModeFsm
+SAFETY_SRC_energy_fsm := HybridEnergyFsm
+SAFETY_SRC_pid := Pid
+SAFETY_SRC_thermo := Hysteresis
+SAFETY_SRC_mpc := Mpc
+SAFETY_SRC_fusion := SensorFusion
+SAFETY_API_drive_fsm := drive
+SAFETY_API_energy_fsm := energy
+SAFETY_API_pid := pid
+SAFETY_API_thermo := thermo
+SAFETY_API_mpc := mpc
+SAFETY_API_fusion := fusion
 CRATE_T     := rust/trading
 MAIN_T      := $(CRATE_T)/src/main.rs
 BIN_T       := $(CRATE_T)/target/release/trading
@@ -101,9 +115,18 @@ $(CRATE_F)/src/order_fsm.rs: rocq rust/ffi_fsm_api.rs
 	sed '/^Debug/d' $(EXTRACTED_FSM) > $@
 	cat rust/ffi_fsm_api.rs >> $@
 
+define SAFETY_RULE
+$$(CRATE_F)/src/$(1).rs: rocq rust/ffi_$$(SAFETY_API_$(1))_api.rs
+	@mkdir -p $$(CRATE_F)/src
+	sed '/^Debug/d' extracted/$$(SAFETY_SRC_$(1)).rs.out > $$@
+	cat rust/ffi_$$(SAFETY_API_$(1))_api.rs >> $$@
+endef
+$(foreach m,$(SAFETY_MODS),$(eval $(call SAFETY_RULE,$(m))))
+
 FFI_GENERATED := $(CRATE_F)/src/sorting.rs $(CRATE_F)/src/trading.rs \
 	$(CRATE_F)/src/trading_checked.rs $(CRATE_F)/src/rle.rs \
-	$(CRATE_F)/src/modexp.rs $(CRATE_F)/src/order_fsm.rs
+	$(CRATE_F)/src/modexp.rs $(CRATE_F)/src/order_fsm.rs \
+	$(foreach m,$(SAFETY_MODS),$(CRATE_F)/src/$(m).rs)
 
 $(FFI_LIB): $(FFI_GENERATED) $(CRATE_F)/src/lib.rs
 	cd $(CRATE_F) && cargo build --release
@@ -113,6 +136,8 @@ python: $(FFI_LIB)
 	cd python && python3 demo.py
 	@echo
 	cd python && python3 demo_more.py
+	@echo
+	cd python && python3 demo_safety.py
 
 # Just the trading example.
 trading: $(MAIN_T)
@@ -135,7 +160,7 @@ clean:
 	-$(MAKE) -f $(ROCQ_MAKEFILE) clean 2>/dev/null || true
 	rm -f $(ROCQ_MAKEFILE) $(ROCQ_MAKEFILE).conf
 	rm -f theories/*.vo theories/*.vok theories/*.vos theories/*.glob theories/.*.aux
-	rm -f $(EXTRACTED_1) $(EXTRACTED_2) $(EXTRACTED_T) $(EXTRACTED_TC) $(EXTRACTED_RLE) $(EXTRACTED_MX) $(EXTRACTED_FSM)
+	rm -f extracted/*.rs.out
 	rm -f $(MAIN_1) $(MAIN_2) $(MAIN_T)
 	rm -f $(FFI_GENERATED)
 	rm -rf $(CRATE_1)/target $(CRATE_2)/target $(CRATE_T)/target $(CRATE_F)/target

@@ -24,6 +24,12 @@ rust/rocq_ffi/src/trading_checked.rs
 rust/rocq_ffi/src/rle.rs
 rust/rocq_ffi/src/modexp.rs
 rust/rocq_ffi/src/order_fsm.rs
+rust/rocq_ffi/src/drive_fsm.rs
+rust/rocq_ffi/src/energy_fsm.rs
+rust/rocq_ffi/src/pid.rs
+rust/rocq_ffi/src/thermo.rs
+rust/rocq_ffi/src/mpc.rs
+rust/rocq_ffi/src/fusion.rs
 
 # Cargo
 rust/*/target/
